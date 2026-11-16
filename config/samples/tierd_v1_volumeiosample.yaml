@@ -1,0 +1,9 @@
+apiVersion: tierd.zanderyk.github.io/v1
+kind: VolumeIOSample
+metadata:
+  labels:
+    app.kubernetes.io/name: tierd
+    app.kubernetes.io/managed-by: kustomize
+  name: volumeiosample-sample
+spec:
+  # TODO(user): Add fields here
