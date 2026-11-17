@@ -78,7 +78,8 @@ type VolumeTierStateStatus struct {
 	// lastModified is the time the status was last modified.
 	LastModified *metav1.Time `json:"lastModified,omitempty"`
 	// lastAppliedTier is the prior tier if a change has occurred.
-	LastAppliedTier string           `json:"lastAppliedTier,omitempty"`
+	LastAppliedTier string `json:"lastAppliedTier,omitempty"`
+	// infeasibleTiers a list of tiers attempted to move the PVC to but unsuccessfully.
 	InfeasibleTiers []InfeasibleTier `json:"infeasibleTiers,omitempty"`
 	// name + since, so the backoff expires
 	// The status of each condition is one of True, False, or Unknown.
@@ -94,15 +95,12 @@ type VolumeTierStateStatus struct {
 // VolumeTierState is the Schema for the volumetierstates API
 type VolumeTierState struct {
 	metav1.TypeMeta `json:",inline"`
-
 	// metadata is a standard object metadata
 	// +optional
 	metav1.ObjectMeta `json:"metadata,omitzero"`
-
 	// spec defines the desired state of VolumeTierState
 	// +required
 	Spec VolumeTierStateSpec `json:"spec"`
-
 	// status defines the observed state of VolumeTierState
 	// +optional
 	Status VolumeTierStateStatus `json:"status,omitzero"`

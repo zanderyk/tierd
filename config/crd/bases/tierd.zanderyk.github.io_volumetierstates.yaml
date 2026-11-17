@@ -109,6 +109,8 @@ spec:
                   tier for this PVC.
                 type: string
               infeasibleTiers:
+                description: infeasibleTiers a list of tiers attempted to move the
+                  PVC to but unsuccessfully.
                 items:
                   description: InfeasibleTier records a tier the CSI driver rejected
                     for this PVC (status.modifyVolumeStatus.status == Infeasible).

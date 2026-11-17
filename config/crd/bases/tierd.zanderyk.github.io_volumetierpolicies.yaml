@@ -167,8 +167,9 @@ spec:
                 type: object
                 x-kubernetes-map-type: atomic
               tiers:
-                description: tiers are the ordered list of performance levels a policy
-                  can move a PVC between
+                description: |-
+                  tiers are the ordered list of performance levels a policy can move a PVC
+                  between, from lowest to highest.
                 items:
                   properties:
                     ceilings:
@@ -189,12 +190,16 @@ spec:
                           type: integer
                       type: object
                     name:
-                      description: name of tier
+                      description: vacName is the name of the VolumeAttributesClass.
                       type: string
                   required:
                   - name
                   type: object
+                minItems: 2
                 type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
             required:
             - mode
             - scaleUp
@@ -274,6 +279,11 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              pvcs:
+                description: pvcs is a list of PVCs this policy has matched.
+                items:
+                  type: string
+                type: array
             type: object
         required:
         - spec

@@ -17,6 +17,9 @@ limitations under the License.
 package v1
 
 import (
+	"fmt"
+	"strconv"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -38,23 +41,27 @@ const (
 type ScaleUp struct {
 	// ioPressureAbove triggers a scale-up when the pod's I/O pressure
 	// (PSI "some" avg60, in percent) exceeds this value.
+	//
 	// +optional
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=100
 	IOPressureAbove *int32 `json:"ioPressureAbove,omitempty"`
 	// latencyP95AboveMs triggers a scale-up when p95 I/O latency on the
 	// volume exceeds this many milliseconds.
+	//
 	// +optional
 	// +kubebuilder:validation:Minimum=1
 	LatencyP95AboveMs *int64 `json:"latencyP95AboveMs,omitempty"`
 	// utilizationAbove triggers a scale-up when usage exceeds this percentage
 	// of the current tier's declared ceilings. Ignored for tiers without
 	// ceilings.
+	//
 	// +optional
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=100
 	UtilizationAbove *int32 `json:"utilizationAbove,omitempty"`
 	// for is how long a trigger must hold continuously before scaling up.
+	//
 	// +optional
 	// +kubebuilder:default="10m"
 	For metav1.Duration `json:"for,omitempty"`
@@ -67,12 +74,14 @@ type ScaleDown struct {
 	// percentage of the next lower tier's declared ceilings, so the volume
 	// would still fit after moving. If that tier has no ceilings, device
 	// utilization (busy time) is used instead.
+	//
 	// +required
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=100
 	UtilizationBelow int32 `json:"utilizationBelow"`
 	// ioPressureBelow additionally requires I/O pressure (PSI "some" avg60,
 	// in percent) to stay below this value.
+	//
 	// +optional
 	// +kubebuilder:default=1
 	// +kubebuilder:validation:Minimum=0
@@ -80,6 +89,7 @@ type ScaleDown struct {
 	IOPressureBelow *int32 `json:"ioPressureBelow,omitempty"`
 	// For is how long the conditions must hold before scaling down. Keep it
 	// much longer than scaleUp.for to avoid flapping.
+	//
 	// +optional
 	// +kubebuilder:default="24h"
 	For metav1.Duration `json:"for,omitempty"`
@@ -87,21 +97,37 @@ type ScaleDown struct {
 
 type Ceiling struct {
 	// iops is the tier's maximum IOPS.
+	//
 	// +optional
 	// +kubebuilder:validation:Minimum=1
 	IOPS *int64 `json:"iops,omitempty"`
 	// throughputMiBps is the tier's maximum throughput in MiB/s.
+	//
 	// +optional
 	// +kubebuilder:validation:Minimum=1
 	ThroughputMiBPS *int64 `json:"throughputMiBps,omitempty"`
 }
 
 type Tier struct {
-	// name of tier
-	Name string `json:"name"`
+	// vacName is the name of the VolumeAttributesClass.
+	VACName string `json:"name"`
 	// ceilings optionally declares this tier's performance limits. If unset, saturation is inferred from latency and I/O pressure.
+	//
 	// +optional
 	Ceilings *Ceiling `json:"ceilings"`
+}
+
+func (t *Tier) String() string {
+	var iops, tp string
+	if t.Ceilings != nil {
+		if t.Ceilings.IOPS != nil {
+			iops = strconv.FormatInt(*t.Ceilings.IOPS, 10)
+		}
+		if t.Ceilings.ThroughputMiBPS != nil {
+			tp = strconv.FormatInt(*t.Ceilings.ThroughputMiBPS, 10)
+		}
+	}
+	return fmt.Sprintf("name=%s,iops=%s,tpmibps=%s", t.VACName, iops, tp)
 }
 
 // VolumeTierPolicySpec defines the desired state of VolumeTierPolicy
@@ -109,19 +135,28 @@ type Tier struct {
 type VolumeTierPolicySpec struct {
 	// selector decides which PVCs a VolumeTierPolicy manages. If empty,
 	// all PVCs in the namespace will be selected.
+	//
 	// +required
 	Selector v1.LabelSelector `json:"selector"`
 	// mode decides whether the PVC(s) will be patched or reported on.
+	//
 	// +kubebuilder:default=Recommend
 	// +kubebuilder:validation:Enum=Recommend;Act
 	Mode VolumeTierPolicyMode `json:"mode"`
-	// tiers are the ordered list of performance levels a policy can move a PVC between
+	// tiers are the ordered list of performance levels a policy can move a PVC
+	// between, from lowest to highest.
+	//
+	// +kubebuilder:validation:MinItems=2
+	// +listType=map
+	// +listMapKey=name
 	Tiers []Tier `json:"tiers"`
 	// scaleUp defines when a PVC moves to the next higher tier.
+	//
 	// +required
 	ScaleUp ScaleUp `json:"scaleUp"`
 	// scaleDown defines when a PVC moves to the next lower tier.
 	// If unset, the policy never scales down.
+	//
 	// +optional
 	ScaleDown *ScaleDown `json:"scaleDown,omitempty"`
 }
@@ -138,6 +173,10 @@ type VolumeTierPolicyStatus struct {
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	// pvcs is a list of PVCs this policy has matched.
+	//
+	// +optional
+	PVCs []string `json:"pvcs,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -147,12 +186,15 @@ type VolumeTierPolicyStatus struct {
 type VolumeTierPolicy struct {
 	metav1.TypeMeta `json:",inline"`
 	// metadata is a standard object metadata
+	//
 	// +optional
 	metav1.ObjectMeta `json:"metadata,omitzero"`
 	// spec defines the desired state of VolumeTierPolicy
+	//
 	// +required
 	Spec VolumeTierPolicySpec `json:"spec"`
 	// status defines the observed state of VolumeTierPolicy
+	//
 	// +optional
 	Status VolumeTierPolicyStatus `json:"status,omitzero"`
 }
