@@ -1,0 +1,11 @@
+resources:
+- service_account.yaml
+- role.yaml
+- role_binding.yaml
+- daemonset.yaml
+images:
+- digest: sha256:a7077dd0c4c7dcaf3676d18bca1e835da66fba6643075a34fa1aa07c30556995
+  name: controller
+  newName: example.azurecr.io/tierd
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization

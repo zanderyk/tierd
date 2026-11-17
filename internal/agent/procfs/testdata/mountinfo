@@ -1,0 +1,6 @@
+22 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw,discard
+35 22 0:5 / /dev rw,nosuid shared:2 - devtmpfs udev rw,size=8122580k
+512 22 8:32 / /var/lib/kubelet/plugins/kubernetes.io/csi/disk.csi.azure.com/9f1c/globalmount rw,relatime shared:300 - ext4 /dev/sdc rw
+530 22 8:32 / /var/lib/kubelet/pods/3b7e2a10-6c1d-4a7e-9f0a-1d2c3b4a5e6f/volumes/kubernetes.io~csi/pvc-0a1b2c3d/mount rw,relatime shared:300 - ext4 /dev/sdc rw
+531 22 0:61 / /var/lib/kubelet/pods/3b7e2a10-6c1d-4a7e-9f0a-1d2c3b4a5e6f/volumes/kubernetes.io~projected/kube-api-access-x2 rw,relatime shared:301 - tmpfs tmpfs rw,size=1048576k
+540 22 0:70 / /mnt/with\040space rw,relatime shared:310 - nfs4 10.0.0.4:/export\040one rw

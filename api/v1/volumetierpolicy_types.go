@@ -21,7 +21,6 @@ import (
 	"strconv"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -137,7 +136,7 @@ type VolumeTierPolicySpec struct {
 	// all PVCs in the namespace will be selected.
 	//
 	// +required
-	Selector v1.LabelSelector `json:"selector"`
+	Selector metav1.LabelSelector `json:"selector"`
 	// mode decides whether the PVC(s) will be patched or reported on.
 	//
 	// +kubebuilder:default=Recommend

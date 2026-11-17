@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  labels:
+    app.kubernetes.io/name: tierd
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/component: agent
+  name: agent
+  namespace: system
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tierd
+      app.kubernetes.io/component: agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: tierd
+        app.kubernetes.io/component: agent
+    spec:
+      serviceAccountName: agent
+      # Run on every node, including tainted ones, wherever volumes can mount.
+      tolerations:
+      - operator: Exists
+      containers:
+      - name: agent
+        image: controller:latest
+        command: ["/agent"]
+        args:
+        - --health-probe-bind-address=:8081
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        securityContext:
+          # Root is needed to read the host's /proc/1/mountinfo and pod
+          # cgroups; nothing else is granted.
+          runAsUser: 0
+          runAsNonRoot: false
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            memory: 128Mi
+        volumeMounts:
+        - name: host-proc
+          mountPath: /host/proc
+          readOnly: true
+        - name: host-cgroup
+          mountPath: /host/sys/fs/cgroup
+          readOnly: true
+      volumes:
+      - name: host-proc
+        hostPath:
+          path: /proc
+          type: Directory
+      - name: host-cgroup
+        hostPath:
+          path: /sys/fs/cgroup
+          type: Directory

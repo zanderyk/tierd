@@ -1,0 +1,18 @@
+# Premium SSD v2 allows up to 500 IOPS/GiB, so a 10Gi disk tops out at 5000.
+apiVersion: storage.k8s.io/v1
+kind: VolumeAttributesClass
+metadata:
+  name: tierd-test-base
+driverName: disk.csi.azure.com
+parameters:
+  DiskIOPSReadWrite: "3000"
+  DiskMBpsReadWrite: "125"
+---
+apiVersion: storage.k8s.io/v1
+kind: VolumeAttributesClass
+metadata:
+  name: tierd-test-fast
+driverName: disk.csi.azure.com
+parameters:
+  DiskIOPSReadWrite: "5000"
+  DiskMBpsReadWrite: "200"

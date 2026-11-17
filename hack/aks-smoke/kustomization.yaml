@@ -1,0 +1,10 @@
+# Smoke test for tierd on AKS: one Premium SSD v2 PVC under fio load, two
+# VolumeAttributesClass tiers, and a VolumeTierPolicy in Recommend mode.
+#   kubectl apply -k hack/aks-smoke
+#   kubectl delete -k hack/aks-smoke
+resources:
+- namespace.yaml
+- vacs.yaml
+- pvc.yaml
+- fio.yaml
+- policy.yaml

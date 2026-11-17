@@ -1,0 +1,28 @@
+apiVersion: tierd.zanderyk.github.io/v1
+kind: VolumeTierPolicy
+metadata:
+  name: tierd-test
+  namespace: tierd-test
+spec:
+  selector:
+    matchLabels:
+      app: tierd-test
+  mode: Recommend
+  tiers:
+  - name: tierd-test-base
+    ceilings:
+      iops: 3000
+      throughputMiBps: 125
+  - name: tierd-test-fast
+    ceilings:
+      iops: 5000
+      throughputMiBps: 200
+  scaleUp:
+    ioPressureAbove: 20
+    latencyP95AboveMs: 20
+    utilizationAbove: 80
+    for: 10m
+  scaleDown:
+    utilizationBelow: 30
+    ioPressureBelow: 1
+    for: 1h

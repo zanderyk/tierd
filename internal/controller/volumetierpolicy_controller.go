@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
@@ -62,6 +63,10 @@ const (
 // tierVACNameIndex indexes VolumeTierPolicies by the VAC names of their tiers,
 // so a VAC event can be mapped to the policies that reference it.
 const tierVACNameIndex = ".spec.tiers.name"
+
+// membershipResyncInterval is how often a Ready policy re-evaluates which
+// PVCs it matches and whether any are claimed by another policy.
+const membershipResyncInterval = 1 * time.Minute
 
 // VolumeTierPolicyReconciler reconciles a VolumeTierPolicy object
 type VolumeTierPolicyReconciler struct {
@@ -109,7 +114,6 @@ func (r *VolumeTierPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	if err := r.validateTiers(ctx, vtp.Spec.Tiers); err != nil {
 		var te *tierError
 		if !errors.As(err, &te) {
-			// API or cache failure: retry.
 			logger.Error(err, "Failed to validate VolumeTierPolicy tiers")
 			return ctrl.Result{}, fmt.Errorf("cannot validate VTP tiers: %w", err)
 		}
@@ -150,8 +154,7 @@ func (r *VolumeTierPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			return ctrl.Result{}, err
 		}
 
-		// A PVC matched by more than one policy is left unmanaged. Every
-		// policy involved computes the same answer, so they never fight.
+		// A PVC matched by more than one policy is left unmanaged.
 		ref := vtp.Name
 		if owners := matchingPolicies(selectors, pvc.Labels); len(owners) > 1 {
 			ref = ""
@@ -166,9 +169,14 @@ func (r *VolumeTierPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	slices.Sort(matched)
 
 	setConflict(vtp, conflicts)
+
 	vtp.Status.PVCs = matched
 	setReady(vtp, metav1.ConditionTrue, ConditionReasonReady, "All tier VolumeAttributesClasses exist and share one driver")
-	return ctrl.Result{}, r.patchStatus(ctx, vtp, base)
+
+	if err := r.patchStatus(ctx, vtp, base); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: membershipResyncInterval}, nil
 }
 
 // ensureVolumeTierState creates the VolumeTierState for a PVC if it does not
@@ -201,8 +209,7 @@ func (r *VolumeTierPolicyReconciler) ensureVolumeTierState(ctx context.Context, 
 	return state, nil
 }
 
-// setPolicyRef records in status which policy manages the state's PVC; ""
-// means none.
+// setPolicyRef records in status which policy manages the state's PVC
 func (r *VolumeTierPolicyReconciler) setPolicyRef(ctx context.Context, state *tierdv1.VolumeTierState, ref string) error {
 	if state.Status.PolicyRef == ref {
 		return nil
@@ -217,8 +224,12 @@ func (r *VolumeTierPolicyReconciler) setPolicyRef(ctx context.Context, state *ti
 
 // namespaceSelectors returns the parsed selector of every policy in vtp's
 // namespace, keyed by policy name. Policies with an invalid selector are
-// skipped; they report the error on their own Ready condition.
-func (r *VolumeTierPolicyReconciler) namespaceSelectors(ctx context.Context, vtp *tierdv1.VolumeTierPolicy, own labels.Selector) (map[string]labels.Selector, error) {
+// skipped.
+func (r *VolumeTierPolicyReconciler) namespaceSelectors(
+	ctx context.Context,
+	vtp *tierdv1.VolumeTierPolicy,
+	own labels.Selector,
+) (map[string]labels.Selector, error) {
 	policies := &tierdv1.VolumeTierPolicyList{}
 	if err := r.List(ctx, policies, client.InNamespace(vtp.Namespace)); err != nil {
 		return nil, fmt.Errorf("cannot list VolumeTierPolicies: %w", err)

@@ -1,0 +1,35 @@
+# Sustained 4k random read/write, enough to push a 3000 IOPS disk to its
+# ceiling. Premium SSD v2 needs a zonal node, so this pins to the apzonal pool.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: fio
+  namespace: tierd-test
+  labels:
+    app: tierd-test
+spec:
+  nodeSelector:
+    agentpool: apzonal
+  containers:
+  - name: fio
+    image: alpine:3.22
+    command: ["sh", "-c"]
+    args:
+    - >-
+      apk add --no-cache fio &&
+      exec fio --name=load --filename=/data/fio.dat --size=2G
+      --rw=randrw --rwmixread=70 --bs=4k --ioengine=libaio --direct=1
+      --iodepth=32 --time_based --runtime=24h --status-interval=60
+    resources:
+      requests:
+        cpu: 250m
+        memory: 128Mi
+      limits:
+        memory: 512Mi
+    volumeMounts:
+    - name: data
+      mountPath: /data
+  volumes:
+  - name: data
+    persistentVolumeClaim:
+      claimName: data
