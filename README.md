@@ -3,13 +3,38 @@ A vendor-agnostic Kubernetes controller that automatically moves PVCs between pe
 
 ## Description
 
+tierd has two parts:
+
+- **Controller** (Deployment): reconciles `VolumeTierPolicy` objects. Each
+  policy selects PVCs by label and lists the VolumeAttributesClasses (tiers) they
+  may move between. For every matched PVC the controller keeps a
+  `VolumeTierState` recording which policy manages it. A PVC matched by more
+  than one policy is left unmanaged, and both policies report a `Conflict`
+  condition.
+- **Node agent** (DaemonSet): finds CSI volumes mounted on its node, reads the
+  block device's counters from `/proc/diskstats` and the pods' cgroup v2
+  `io.pressure`, and publishes a `VolumeIOSample` per managed volume (IOPS,
+  throughput, p50/p95 latency, utilization, queue depth, PSI).
+
+```sh
+kubectl get volumetierpolicies,volumetierstates,volumeiosamples -A
+```
+
+**Status:** early development. Membership and metrics collection work;
+tier recommendations and Act mode are not implemented yet. See
+[docs/PLAN.md](docs/PLAN.md) for the design and roadmap.
+
+Limitations today: filesystem-mode block volumes only (no `volumeMode: Block`,
+NFS or Azure Files metrics).
+
 ## Getting Started
 
 ### Prerequisites
-- go version v1.24.6+
+- go version v1.27+
 - docker version 17.03+.
-- kubectl version v1.11.3+.
-- Access to a Kubernetes v1.11.3+ cluster.
+- kubectl version v1.34+.
+- A Kubernetes v1.34+ cluster (VolumeAttributesClass GA) with cgroup v2 nodes
+  and a CSI driver that supports `ControllerModifyVolume`.
 
 ### To Deploy on the cluster
 **Build and push your image to the location specified by `IMG`:**
@@ -28,11 +53,14 @@ Make sure you have the proper permission to the registry if the above commands d
 make install
 ```
 
-**Deploy the Manager to the cluster with the image specified by `IMG`:**
+**Deploy the controller and node agent with the image specified by `IMG`:**
 
 ```sh
 make deploy IMG=<some-registry>/tierd:tag
 ```
+
+Both use the same image (`/manager` and `/agent`). Use a unique tag or a
+digest per build: nodes that already have a tag cached will not pull it again.
 
 > **NOTE**: If you encounter RBAC errors, you may need to grant yourself cluster-admin
 privileges or be logged in as admin.
@@ -64,6 +92,29 @@ make uninstall
 ```sh
 make undeploy
 ```
+
+## Testing
+
+```sh
+make test   # unit tests + envtest (real API server and etcd, no controllers)
+make lint
+```
+
+### Smoke test on AKS
+
+`hack/aks-smoke` creates two Premium SSD v2 tiers (3000 and 5000 IOPS), a
+10Gi PVC, an fio pod and a Recommend-mode policy in namespace `tierd-test`:
+
+```sh
+kubectl apply -k hack/aks-smoke
+kubectl get volumeiosample -n tierd-test -w
+```
+
+Premium SSD v2 needs a zonal node pool; edit the fio pod's `nodeSelector`
+for your cluster. The VM size must allow more uncached disk IOPS than the
+highest tier, or the VM, not the disk, becomes the limit. fio runs at
+`iodepth=32`, which trips node-exporter's `NodeDiskIOSaturation` alert after
+30 minutes; lower it if that alert pages someone.
 
 ## Project Distribution
 

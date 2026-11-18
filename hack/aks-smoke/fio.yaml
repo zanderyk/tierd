@@ -1,5 +1,7 @@
 # Sustained 4k random read/write, enough to push a 3000 IOPS disk to its
-# ceiling. Premium SSD v2 needs a zonal node, so this pins to the apzonal pool.
+# ceiling. Premium SSD v2 needs a zonal node; this assumes every node pool in
+# the cluster is zonal (the PVC is WaitForFirstConsumer, so the disk follows
+# whichever zone the pod lands in).
 apiVersion: v1
 kind: Pod
 metadata:
@@ -8,8 +10,6 @@ metadata:
   labels:
     app: tierd-test
 spec:
-  nodeSelector:
-    agentpool: apzonal
   containers:
   - name: fio
     image: alpine:3.22
@@ -22,7 +22,7 @@ spec:
       --iodepth=32 --time_based --runtime=24h --status-interval=60
     resources:
       requests:
-        cpu: 250m
+        cpu: 100m
         memory: 128Mi
       limits:
         memory: 512Mi

@@ -4,6 +4,22 @@ A vendor-agnostic Kubernetes controller that automatically moves PVCs between
 performance tiers (VolumeAttributesClasses) based on observed I/O behavior.
 Think "VPA for disks."
 
+## Status (2026-11-17)
+
+| Area | State |
+|---|---|
+| CRDs (`VolumeTierPolicy`, `VolumeTierState`, `VolumeIOSample`) | Done |
+| Policy reconciler (§7.1) | Done: tier validation (`Ready`), `VolumeTierState` per matched PVC, `status.policyRef`, `Conflict` condition, 5-minute resync. Not yet: releasing PVCs that stop matching; PVC/neighbour-policy watches (the resync covers them for now). |
+| Node agent (§5.1) | Done for filesystem-mode block volumes: diskstats + pod PSI, `VolumeIOSample` per managed PV. Not yet: `/metrics`, block-mode volumes, NFS. |
+| State reconciler (§7.2) | Not started (scaffold only). Next up. |
+| Act mode, cooldowns, infeasible handling | Not started |
+| Tests | envtest for the policy reconciler; unit tests for procfs parsing, windowing, volume discovery and cgroup lookup |
+| Cloud validation | AKS smoke test in `hack/aks-smoke` (Premium SSD v2, fio) |
+
+Next, in order: state reconciler in Recommend mode → Act mode → release
+unmatched PVCs → replace the resync with watches → agent `/metrics`,
+block-mode and an explicit NFS skip → kind e2e.
+
 ---
 
 ## 1. Problem
@@ -89,7 +105,8 @@ No node-side calls happen during modification and pods are not restarted.
 **Volume discovery**
 - Filesystem volumes: `/var/lib/kubelet/pods/<pod-uid>/volumes/kubernetes.io~csi/<pv-name>/mount`
 - Raw block volumes (`volumeMode: Block`): `/var/lib/kubelet/plugins/kubernetes.io/csi/volumeDevices/...`
-- Resolve mount to device `maj:min` via `/proc/self/mountinfo` (agent mounts the host's `/proc` and kubelet dir read-only).
+- Resolve mount to device `maj:min` via the host's `/proc/1/mountinfo` (agent mounts the host's `/proc` read-only; no kubelet dir mount needed).
+  Mounts with major 0 (NFS, Azure Files, tmpfs, projected) are skipped.
 
 **Block-backed volumes**
 - Per-device: `/proc/diskstats` (or `/sys/block/<dev>/stat`) gives IOPS, throughput,
@@ -108,7 +125,21 @@ No node-side calls happen during modification and pods are not restarted.
 **Publishing**
 - `VolumeIOSample` CR per PV, updated every 60s (configurable) with rolling
   aggregates: p50/p95 latency, IOPS, MB/s, util, PSI avg60.
-- Prometheus `/metrics` endpoint with the same series.
+- Only PVs whose PVC has a `VolumeTierState` with a non-empty `status.policyRef`
+  get a sample; the agent deletes the sample once the PVC stops being managed.
+  Samples are owned by the PVC so they are garbage collected with it.
+- Prometheus `/metrics` endpoint with the same series (not yet implemented).
+
+**As built** (`cmd/agent`, `internal/agent`, `config/agent`)
+- Reads `/proc/diskstats` every 10s, publishes every 60s over a 60s window
+  (`--sample-interval`, `--publish-interval`, `--window`).
+- Latency p50/p95 are percentiles of per-interval average latency (diskstats
+  has no per-I/O latency), over intervals that completed at least one I/O.
+- PSI is the max `io.pressure` `some avg60` over the pods mounting the volume;
+  pod cgroups are found for both the systemd and cgroupfs drivers.
+- cgroup `io.stat` per-pod attribution is not used yet.
+- Runs as root with all capabilities dropped and a read-only root filesystem;
+  all API reads are uncached GETs, so the agent starts no informers.
 - Scale note: 1 write/min/volume ≈ 17 writes/s at 1,000 volumes. For larger
   fleets, offer a `metricsSource: prometheus` mode where the controller queries
   Prometheus instead of reading CRs.
@@ -194,9 +225,8 @@ metadata:
   namespace: tenants
   ownerReferences:           # GC'd with the PVC
     - {apiVersion: v1, kind: PersistentVolumeClaim, name: data-pg-0, uid: ...}
-spec:
-  policyRef: postgres-tiers  # set by the policy controller; empty = unmanaged
 status:
+  policyRef: postgres-tiers  # set by the policy controller; empty = unmanaged
   currentTier: standard
   recommendedTier: fast
   reason: "PSI avg60 34% for 14m, throughput flat"
@@ -218,9 +248,9 @@ status:
     - type: ManualOverride   # someone else changed the PVC's VAC
 ```
 
-`policyRef` is in spec because it is an assignment made by one controller and
-consumed by another; everything the state controller observes or decides is
-status. `pendingDirection`/`pendingSince` are needed to evaluate `for` windows
+`policyRef` lives in status alongside everything else; the spec is empty.
+The policy reconciler is its only writer, and it is recomputed from the
+policies' selectors on every reconcile, so losing it loses nothing. `pendingDirection`/`pendingSince` are needed to evaluate `for` windows
 across reconciles (not yet in the Go types).
 
 ### 6.3 What stays on the PVC
@@ -246,11 +276,18 @@ for each policy in namespace:
 for each matched PVC:
   owners = policies (in namespace) whose selector matches it
   ensure VolumeTierState(name = PVC name) exists, ownerRef → PVC
-  spec.policyRef = owners[0] if len(owners) == 1, else ""   (conflict)
+  status.policyRef = owners[0] if len(owners) == 1, else ""   (conflict)
 for each VolumeTierState whose PVC no longer matches its policy:
-  spec.policyRef = ""    (keep the object so cooldown history survives re-matching)
+  status.policyRef = ""    (keep the object so cooldown history survives re-matching)
 policy.status = {matchedVolumes, conditions: Ready, Conflict}
+requeue after 5m
 ```
+
+As built: policies with invalid selectors are skipped when computing owners.
+The conflict message lists each PVC with the policies claiming it, e.g.
+`data (policy-a, policy-b)`. Releasing PVCs that no longer match is not yet
+implemented, and PVC and neighbouring-policy watches are replaced for now by
+the 5-minute requeue.
 
 The policy reconciler never touches PVC specs.
 
@@ -258,11 +295,11 @@ The policy reconciler never touches PVC specs.
 
 Watches: `VolumeTierState`; its PVC (same name); `VolumeIOSample` (PV →
 claimRef → state); the referenced policy (via a field index on
-`spec.policyRef`). Also requeues at the next interesting time: end of a `for`
+`status.policyRef`). Also requeues at the next interesting time: end of a `for`
 window, cooldown expiry, or the earliest `retryAfter`.
 
 ```
-load state, PVC, PV, policy (spec.policyRef)
+load state, PVC, PV, policy (status.policyRef)
 if policyRef empty, policy missing, PVC opted out, or PVC unbound:
     Managed=False; return
 skip if current VAC not in policy tiers, or VAC driver != PV's CSI driver
@@ -354,16 +391,16 @@ The controller discovers support at runtime: no VAC for the driver, or an
 
 ## 10. Milestones
 
-| # | Milestone | Deliverable |
-|---|---|---|
-| M0 | Scaffold | Kubebuilder project, CRD types, RBAC, CI |
-| M1 | Recommend-only | Controller writes recommendations from synthetic samples |
-| M2 | Node agent (block) | Mount → device → PV mapping; diskstats, io.stat, PSI; `VolumeIOSample` + `/metrics` |
-| M3 | Act mode | Patching, cooldowns, Infeasible handling, rate limits, manual-override detection |
-| M4 | Cloud validation | EBS and GCE e2e runs; docs on tier design per provider |
-| M5 | NFS path | `/proc/self/mountstats` collector |
-| M6 | Prometheus source | Optional `metricsSource: prometheus` for large fleets |
-| M7 | Release | Helm chart, Grafana dashboard, v0.1.0 |
+| # | Milestone | Deliverable | Status |
+|---|---|---|---|
+| M0 | Scaffold | Kubebuilder project, CRD types, RBAC, CI | Done (CI not yet) |
+| M1 | Recommend-only | Controller writes recommendations from synthetic samples | Membership done; recommendations next |
+| M2 | Node agent (block) | Mount → device → PV mapping; diskstats, io.stat, PSI; `VolumeIOSample` + `/metrics` | Mostly done; no `io.stat`, `/metrics` or block-mode yet |
+| M3 | Act mode | Patching, cooldowns, Infeasible handling, rate limits, manual-override detection | Not started |
+| M4 | Cloud validation | EBS, GCE and AKS e2e runs; docs on tier design per provider | AKS smoke test running |
+| M5 | NFS path | `/proc/self/mountstats` collector | Not started |
+| M6 | Prometheus source | Optional `metricsSource: prometheus` for large fleets | Not started |
+| M7 | Release | Helm chart, Grafana dashboard, v0.1.0 | Not started |
 
 ## 11. Side track: Trident `ControllerModifyVolume` contribution
 
