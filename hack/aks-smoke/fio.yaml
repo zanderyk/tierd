@@ -2,34 +2,49 @@
 # ceiling. Premium SSD v2 needs a zonal node; this assumes every node pool in
 # the cluster is zonal (the PVC is WaitForFirstConsumer, so the disk follows
 # whichever zone the pod lands in).
-apiVersion: v1
-kind: Pod
+apiVersion: apps/v1
+kind: Deployment
 metadata:
   name: fio
   namespace: tierd-test
   labels:
     app: tierd-test
 spec:
-  containers:
-  - name: fio
-    image: alpine:3.22
-    command: ["sh", "-c"]
-    args:
-    - >-
-      apk add --no-cache fio &&
-      exec fio --name=load --filename=/data/fio.dat --size=2G
-      --rw=randrw --rwmixread=70 --bs=4k --ioengine=libaio --direct=1
-      --iodepth=32 --time_based --runtime=24h --status-interval=60
-    resources:
-      requests:
-        cpu: 100m
-        memory: 128Mi
-      limits:
-        memory: 512Mi
-    volumeMounts:
-    - name: data
-      mountPath: /data
-  volumes:
-  - name: data
-    persistentVolumeClaim:
-      claimName: data
+  replicas: 1
+  # The PVC is ReadWriteOnce: stop the old pod before starting a new one so
+  # the disk can detach and reattach.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: tierd-test
+      app.kubernetes.io/name: fio
+  template:
+    metadata:
+      labels:
+        app: tierd-test
+        app.kubernetes.io/name: fio
+    spec:
+      containers:
+      - name: fio
+        image: alpine:3.22
+        command: ["sh", "-c"]
+        args:
+        - >-
+          apk add --no-cache fio &&
+          exec fio --name=load --filename=/data/fio.dat --size=2G
+          --rw=randrw --rwmixread=70 --bs=4k --ioengine=libaio --direct=1
+          --iodepth=32 --time_based --runtime=24h --status-interval=60
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            memory: 512Mi
+        volumeMounts:
+        - name: data
+          mountPath: /data
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: data

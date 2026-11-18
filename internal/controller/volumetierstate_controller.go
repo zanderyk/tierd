@@ -18,14 +18,34 @@ package controller
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	zanderykgithubiov1 "github.com/zanderyk/tierd/api/v1"
+	tierdv1 "github.com/zanderyk/tierd/api/v1"
 )
+
+// ConditionVTSManaged reports whether a policy is actively managing the PVC.
+const ConditionVTSManaged = "Managed"
+
+const (
+	ConditionReasonPolicyMatched = "PolicyMatched"
+	ConditionReasonInvalidPVC    = "InvalidPVC"
+	ConditionReasonMissingPolicy = "MissingPolicy"
+)
+
+// errPVCNotBound means the PVC exists but has not bound to a volume yet.
+var errPVCNotBound = errors.New("PVC is not bound")
 
 // VolumeTierStateReconciler reconciles a VolumeTierState object
 type VolumeTierStateReconciler struct {
@@ -36,28 +56,119 @@ type VolumeTierStateReconciler struct {
 // +kubebuilder:rbac:groups=tierd.zanderyk.github.io,resources=volumetierstates,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=tierd.zanderyk.github.io,resources=volumetierstates/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=tierd.zanderyk.github.io,resources=volumetierstates/finalizers,verbs=update
+// +kubebuilder:rbac:groups=tierd.zanderyk.github.io,resources=volumeiosamples,verbs=get;list;watch
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the VolumeTierState object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.25.0/pkg/reconcile
 func (r *VolumeTierStateReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = logf.FromContext(ctx)
+	logger := logf.FromContext(ctx)
 
-	// TODO(user): your logic here
+	vts := &tierdv1.VolumeTierState{}
+	if err := r.Get(ctx, req.NamespacedName, vts); err != nil {
+		if !apierrors.IsNotFound(err) {
+			logger.Error(err, "Failed to get VolumeTierState", "name", req.Name)
+		}
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	base := vts.DeepCopy()
+
+	pvc, err := r.ValidatePVC(ctx, req.NamespacedName)
+	if err != nil && !apierrors.IsNotFound(err) && !errors.Is(err, errPVCNotBound) {
+		return ctrl.Result{}, err
+	}
+	if err != nil {
+		logger.Error(err, "PVC validation failed")
+		setManaged(vts, metav1.ConditionFalse, ConditionReasonInvalidPVC, err.Error())
+		if err := r.patchStatus(ctx, vts, base); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
+	}
+
+	// Set PVC's current VolumeAttributesClass
+	if pvc.Status.CurrentVolumeAttributesClassName != nil {
+		vts.Status.CurrentTier = *pvc.Status.CurrentVolumeAttributesClassName
+	}
+
+	policyName := vts.Status.PolicyRef
+
+	if policyName == "" {
+		err := fmt.Errorf("policy ref is empty")
+		logger.Error(err, "VTS policy ref is empty")
+		setManaged(vts, metav1.ConditionFalse, ConditionReasonMissingPolicy, err.Error())
+		if err := r.patchStatus(ctx, vts, base); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
+	}
+
+	vtp := &tierdv1.VolumeTierPolicy{}
+	key := types.NamespacedName{Namespace: req.Namespace, Name: policyName}
+	if err := r.Get(ctx, key, vtp); err != nil {
+		if apierrors.IsNotFound(err) {
+			logger.Info("Policy not found", "policyName", policyName)
+			setManaged(vts, metav1.ConditionFalse, ConditionReasonMissingPolicy,
+				fmt.Sprintf("VolumeTierPolicy %s not found", policyName))
+			if err := r.patchStatus(ctx, vts, base); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{}, nil
+		}
+		logger.Error(err, "Failed to get VolumeTierPolicy", "policyName", policyName)
+		return ctrl.Result{}, err
+	}
+
+	vioSample := &tierdv1.VolumeIOSample{}
+	if err := r.Get(ctx, req.NamespacedName, vioSample); err != nil {
+		if !apierrors.IsNotFound(err) {
+			logger.Error(err, "Failed to get VolumeIOSample", "name", req.Name)
+		}
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	setManaged(vts, metav1.ConditionTrue, ConditionReasonPolicyMatched,
+		fmt.Sprintf("Managed by VolumeTierPolicy %s", vts.Status.PolicyRef))
+	if err := r.patchStatus(ctx, vts, base); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	return ctrl.Result{}, nil
+}
+
+func (r *VolumeTierStateReconciler) patchStatus(ctx context.Context, vts, base *tierdv1.VolumeTierState) error {
+	if err := r.Status().Patch(ctx, vts, client.MergeFrom(base)); err != nil {
+		logf.FromContext(ctx).Error(err, "Failed to patch VolumeTierState status")
+		return fmt.Errorf("cannot patch VTS status: %w", err)
+	}
+	return nil
+}
+
+func (r *VolumeTierStateReconciler) ValidatePVC(ctx context.Context, nsName types.NamespacedName) (*corev1.PersistentVolumeClaim, error) {
+	pvc := &corev1.PersistentVolumeClaim{}
+	if err := r.Get(ctx, nsName, pvc); err != nil {
+		return nil, fmt.Errorf("cannot get pvc: %w", err)
+	}
+	if pvc.Status.Phase != corev1.ClaimBound {
+		return nil, fmt.Errorf("PVC %s: %w", nsName.Name, errPVCNotBound)
+	}
+	return pvc, nil
+}
+
+func setManaged(vts *tierdv1.VolumeTierState, status metav1.ConditionStatus, reason, message string) {
+	meta.SetStatusCondition(&vts.Status.Conditions, metav1.Condition{
+		Type:               ConditionVTSManaged,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: vts.Generation,
+	})
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *VolumeTierStateReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&zanderykgithubiov1.VolumeTierState{}).
+		For(&tierdv1.VolumeTierState{}).
 		Named("volumetierstate").
+		Watches(&corev1.PersistentVolumeClaim{}, &handler.EnqueueRequestForObject{}).
+		Watches(&tierdv1.VolumeIOSample{}, &handler.EnqueueRequestForObject{}).
 		Complete(r)
 }

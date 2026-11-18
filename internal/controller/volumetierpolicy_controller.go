@@ -41,23 +41,23 @@ import (
 	tierdv1 "github.com/zanderyk/tierd/api/v1"
 )
 
-type ConditionType string
+type VTPConditionType string
 
 const (
-	ConditionVTPReady    ConditionType = "Ready"
-	ConditionVTPConflict ConditionType = "Conflict"
+	ConditionVTPReady    VTPConditionType = "Ready"
+	ConditionVTPConflict VTPConditionType = "Conflict"
 )
 
-type ConditionReason string
+type VTPConditionReason string
 
 const (
-	ConditionReasonError                         ConditionReason = "Error"
-	ConditionReasonReady                         ConditionReason = "Ready"
-	ConditionReasonInvalidTiers                  ConditionReason = "InvalidTiers"
-	ConditionReasonVolumeAttributesClassNotFound ConditionReason = "VolumeAttributesClassNotFound"
-	ConditionReasonDriverMismatch                ConditionReason = "DriverMismatch"
-	ConditionReasonNoConflict                    ConditionReason = "NoConflict"
-	ConditionReasonPolicyConflict                ConditionReason = "PolicyConflict"
+	VTPConditionReasonError                         VTPConditionReason = "Error"
+	VTPConditionReasonReady                         VTPConditionReason = "Ready"
+	VTPConditionReasonInvalidTiers                  VTPConditionReason = "InvalidTiers"
+	VTPConditionReasonVolumeAttributesClassNotFound VTPConditionReason = "VolumeAttributesClassNotFound"
+	VTPConditionReasonDriverMismatch                VTPConditionReason = "DriverMismatch"
+	VTPConditionReasonNoConflict                    VTPConditionReason = "NoConflict"
+	VTPConditionReasonPolicyConflict                VTPConditionReason = "PolicyConflict"
 )
 
 // tierVACNameIndex indexes VolumeTierPolicies by the VAC names of their tiers,
@@ -78,7 +78,7 @@ type VolumeTierPolicyReconciler struct {
 // policy or the cluster's VolumeAttributesClasses can fix. It is reported on
 // the Ready condition instead of being retried.
 type tierError struct {
-	reason ConditionReason
+	reason VTPConditionReason
 	err    error
 }
 
@@ -171,7 +171,7 @@ func (r *VolumeTierPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	setConflict(vtp, conflicts)
 
 	vtp.Status.PVCs = matched
-	setReady(vtp, metav1.ConditionTrue, ConditionReasonReady, "All tier VolumeAttributesClasses exist and share one driver")
+	setReady(vtp, metav1.ConditionTrue, VTPConditionReasonReady, "All tier VolumeAttributesClasses exist and share one driver")
 
 	if err := r.patchStatus(ctx, vtp, base); err != nil {
 		return ctrl.Result{}, err
@@ -262,19 +262,19 @@ func setConflict(vtp *tierdv1.VolumeTierPolicy, conflicts []string) {
 	cond := metav1.Condition{
 		Type:               string(ConditionVTPConflict),
 		Status:             metav1.ConditionFalse,
-		Reason:             string(ConditionReasonNoConflict),
+		Reason:             string(VTPConditionReasonNoConflict),
 		Message:            "No matched PVC is matched by another VolumeTierPolicy",
 		ObservedGeneration: vtp.Generation,
 	}
 	if len(conflicts) > 0 {
 		cond.Status = metav1.ConditionTrue
-		cond.Reason = string(ConditionReasonPolicyConflict)
+		cond.Reason = string(VTPConditionReasonPolicyConflict)
 		cond.Message = "PVCs also matched by other VolumeTierPolicies are left unmanaged: " + strings.Join(conflicts, "; ")
 	}
 	meta.SetStatusCondition(&vtp.Status.Conditions, cond)
 }
 
-func setReady(vtp *tierdv1.VolumeTierPolicy, status metav1.ConditionStatus, reason ConditionReason, msg string) {
+func setReady(vtp *tierdv1.VolumeTierPolicy, status metav1.ConditionStatus, reason VTPConditionReason, msg string) {
 	meta.SetStatusCondition(&vtp.Status.Conditions, metav1.Condition{
 		Type:               string(ConditionVTPReady),
 		Status:             status,
@@ -300,7 +300,7 @@ func (r *VolumeTierPolicyReconciler) patchStatus(ctx context.Context, vtp, base 
 // as *tierError; any other error is an API failure and should be retried.
 func (r *VolumeTierPolicyReconciler) validateTiers(ctx context.Context, tiers []tierdv1.Tier) error {
 	if err := validateTierSpec(tiers); err != nil {
-		return &tierError{reason: ConditionReasonInvalidTiers, err: err}
+		return &tierError{reason: VTPConditionReasonInvalidTiers, err: err}
 	}
 	return r.validateVolumeAttributesClasses(ctx, tiers)
 }
@@ -325,7 +325,7 @@ func (r *VolumeTierPolicyReconciler) validateVolumeAttributesClasses(ctx context
 
 	if len(missing) > 0 {
 		return &tierError{
-			reason: ConditionReasonVolumeAttributesClassNotFound,
+			reason: VTPConditionReasonVolumeAttributesClassNotFound,
 			err:    fmt.Errorf("VolumeAttributesClasses not found: %s", strings.Join(missing, ", ")),
 		}
 	}
@@ -336,7 +336,7 @@ func (r *VolumeTierPolicyReconciler) validateVolumeAttributesClasses(ctx context
 		}
 		slices.Sort(parts)
 		return &tierError{
-			reason: ConditionReasonDriverMismatch,
+			reason: VTPConditionReasonDriverMismatch,
 			err:    fmt.Errorf("tier VolumeAttributesClasses use different drivers: %s", strings.Join(parts, "; ")),
 		}
 	}

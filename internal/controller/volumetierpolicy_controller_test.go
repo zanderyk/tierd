@@ -167,7 +167,7 @@ var _ = Describe("VolumeTierPolicy Controller", func() {
 			cond := meta.FindStatusCondition(getPolicy(name).Status.Conditions, string(ConditionVTPConflict))
 			Expect(cond).NotTo(BeNil())
 			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-			Expect(cond.Reason).To(Equal(string(ConditionReasonPolicyConflict)))
+			Expect(cond.Reason).To(Equal(string(VTPConditionReasonPolicyConflict)))
 			Expect(cond.Message).To(ContainSubstring("%s (policy-a, policy-b)", pvcName))
 		}
 

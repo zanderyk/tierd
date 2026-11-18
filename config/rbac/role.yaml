@@ -23,6 +23,14 @@ rules:
 - apiGroups:
   - tierd.zanderyk.github.io
   resources:
+  - volumeiosamples
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - tierd.zanderyk.github.io
+  resources:
   - volumetierpolicies
   - volumetierstates
   verbs:
