@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -125,6 +126,9 @@ func (r *VolumeTierStateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	dir, why := r.Evaluate(vtp, vts.Status.CurrentTier, vioSample)
+	fmt.Println(dir, why)
+
 	setManaged(vts, metav1.ConditionTrue, ConditionReasonPolicyMatched,
 		fmt.Sprintf("Managed by VolumeTierPolicy %s", vts.Status.PolicyRef))
 	if err := r.patchStatus(ctx, vts, base); err != nil {
@@ -132,6 +136,19 @@ func (r *VolumeTierStateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// Evaluate runs the logic for a VolumeTierState deciding if there should
+// be action taken:
+//   - Scale up if _any_ threshold is exceeded
+//   - Scale down if _all_ conditions hold
+func (r *VolumeTierStateReconciler) Evaluate(vtp *tierdv1.VolumeTierPolicy,
+	currentTier string, sample *tierdv1.VolumeIOSample) (scaleDirection, string) {
+	i := slices.IndexFunc(vtp.Spec.Tiers, func(t tierdv1.Tier) bool { return t.VACName == currentTier })
+	if i < 0 {
+		return scaleDirectionNone, "current tier is not in the policy"
+	}
+	return wantDirection(vtp.Spec, i, sample.Status)
 }
 
 func (r *VolumeTierStateReconciler) patchStatus(ctx context.Context, vts, base *tierdv1.VolumeTierState) error {
