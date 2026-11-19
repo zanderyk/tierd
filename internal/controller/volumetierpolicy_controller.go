@@ -32,10 +32,12 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	tierdv1 "github.com/zanderyk/tierd/api/v1"
@@ -64,13 +66,15 @@ const (
 	VTPConditionReasonPolicyConflict                VTPConditionReason = "PolicyConflict"
 )
 
-// tierVACNameIndex indexes VolumeTierPolicies by the VAC names of their tiers,
-// so a VAC event can be mapped to the policies that reference it.
-const tierVACNameIndex = ".spec.tiers.name"
+const (
+	// tierVACNameIndex indexes VolumeTierPolicies by the VAC names of their tiers,
+	// so a VAC event can be mapped to the policies that reference it.
+	tierVACNameIndex = ".spec.tiers.name"
 
-// membershipResyncInterval is how often a Ready policy re-evaluates which
-// PVCs it matches and whether any are claimed by another policy.
-const membershipResyncInterval = 1 * time.Minute
+	// membershipResyncInterval is how often a Ready policy re-evaluates which
+	// PVCs it matches and whether any are claimed by another policy.
+	membershipResyncInterval = 5 * time.Minute
+)
 
 // VolumeTierPolicyReconciler reconciles a VolumeTierPolicy object
 type VolumeTierPolicyReconciler struct {
@@ -460,7 +464,7 @@ func (r *VolumeTierPolicyReconciler) policiesForVAC(ctx context.Context, obj cli
 	return reqs
 }
 
-func (r *VolumeTierPolicyReconciler) policiesForPVC(ctx context.Context, obj client.Object) []reconcile.Request {
+func (r *VolumeTierPolicyReconciler) policiesInNamespace(ctx context.Context, obj client.Object) []reconcile.Request {
 	policies := &tierdv1.VolumeTierPolicyList{}
 	if err := r.List(ctx, policies, client.InNamespace(obj.GetNamespace())); err != nil {
 		return nil
@@ -488,7 +492,12 @@ func (r *VolumeTierPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&tierdv1.VolumeTierPolicy{}).
-		Watches(&corev1.PersistentVolumeClaim{}, handler.EnqueueRequestsFromMapFunc(r.policiesForPVC)).
+		Watches(&corev1.PersistentVolumeClaim{}, handler.EnqueueRequestsFromMapFunc(r.policiesInNamespace)).
+		Watches(&tierdv1.VolumeTierPolicy{},
+			handler.EnqueueRequestsFromMapFunc(r.policiesInNamespace),
+			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		Watches(&tierdv1.VolumeTierState{},
+			handler.EnqueueRequestsFromMapFunc(r.policiesInNamespace)).
 		Watches(&storagev1.VolumeAttributesClass{}, handler.EnqueueRequestsFromMapFunc(r.policiesForVAC)).
 		Named("volumetierpolicy").
 		Complete(r)

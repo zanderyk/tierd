@@ -42,6 +42,8 @@ var _ = Describe("VolumeTierPolicy Controller", func() {
 		vacLow    = "test-tier-low"
 		vacHigh   = "test-tier-high"
 		pvcName   = "test-pvc"
+		policyA   = "policy-a"
+		policyB   = "policy-b"
 	)
 	pvcLabels := map[string]string{"app": "test-db"}
 
@@ -140,34 +142,34 @@ var _ = Describe("VolumeTierPolicy Controller", func() {
 	})
 
 	It("assigns the PVC to the only matching policy", func() {
-		Expect(k8sClient.Create(ctx, newPolicy("policy-a"))).To(Succeed())
+		Expect(k8sClient.Create(ctx, newPolicy(policyA))).To(Succeed())
 
-		res := reconcileVTP("policy-a")
+		res := reconcileVTP(policyA)
 		Expect(res.RequeueAfter).To(Equal(membershipResyncInterval))
 
-		vtp := getPolicy("policy-a")
+		vtp := getPolicy(policyA)
 		Expect(meta.IsStatusConditionTrue(vtp.Status.Conditions, string(ConditionVTPReady))).To(BeTrue())
 		Expect(meta.IsStatusConditionFalse(vtp.Status.Conditions, string(ConditionVTPConflict))).To(BeTrue())
 		Expect(vtp.Status.PVCs).To(Equal([]string{pvcName}))
 
 		state := getState()
-		Expect(state.Status.PolicyRef).To(Equal("policy-a"))
+		Expect(state.Status.PolicyRef).To(Equal(policyA))
 		Expect(state.OwnerReferences).To(HaveLen(1))
 		Expect(state.OwnerReferences[0].Name).To(Equal(pvcName))
 	})
 
 	It("leaves the PVC unmanaged and reports Conflict when two policies match it", func() {
-		Expect(k8sClient.Create(ctx, newPolicy("policy-a"))).To(Succeed())
-		reconcileVTP("policy-a")
-		Expect(getState().Status.PolicyRef).To(Equal("policy-a"))
+		Expect(k8sClient.Create(ctx, newPolicy(policyA))).To(Succeed())
+		reconcileVTP(policyA)
+		Expect(getState().Status.PolicyRef).To(Equal(policyA))
 
 		By("adding a second policy with an overlapping selector")
-		Expect(k8sClient.Create(ctx, newPolicy("policy-b"))).To(Succeed())
-		reconcileVTP("policy-b")
-		reconcileVTP("policy-a")
+		Expect(k8sClient.Create(ctx, newPolicy(policyB))).To(Succeed())
+		reconcileVTP(policyB)
+		reconcileVTP(policyA)
 
 		Expect(getState().Status.PolicyRef).To(BeEmpty())
-		for _, name := range []string{"policy-a", "policy-b"} {
+		for _, name := range []string{policyA, policyB} {
 			cond := meta.FindStatusCondition(getPolicy(name).Status.Conditions, string(ConditionVTPConflict))
 			Expect(cond).NotTo(BeNil())
 			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
@@ -176,14 +178,14 @@ var _ = Describe("VolumeTierPolicy Controller", func() {
 		}
 
 		By("deleting one policy; the survivor claims the PVC on its next reconcile")
-		Expect(k8sClient.Delete(ctx, getPolicy("policy-b"))).To(Succeed())
-		reconcileVTP("policy-b") // runs the finalizer, which lets the delete finish
+		Expect(k8sClient.Delete(ctx, getPolicy(policyB))).To(Succeed())
+		reconcileVTP(policyB) // runs the finalizer, which lets the delete finish
 		Expect(errors.IsNotFound(k8sClient.Get(ctx,
-			types.NamespacedName{Namespace: namespace, Name: "policy-b"}, &zanderykgithubiov1.VolumeTierPolicy{}))).To(BeTrue())
-		reconcileVTP("policy-a")
+			types.NamespacedName{Namespace: namespace, Name: policyB}, &zanderykgithubiov1.VolumeTierPolicy{}))).To(BeTrue())
+		reconcileVTP(policyA)
 
-		Expect(getState().Status.PolicyRef).To(Equal("policy-a"))
-		Expect(meta.IsStatusConditionFalse(getPolicy("policy-a").Status.Conditions, string(ConditionVTPConflict))).To(BeTrue())
+		Expect(getState().Status.PolicyRef).To(Equal(policyA))
+		Expect(meta.IsStatusConditionFalse(getPolicy(policyA).Status.Conditions, string(ConditionVTPConflict))).To(BeTrue())
 	})
 
 	stateGone := func() bool {
@@ -192,32 +194,63 @@ var _ = Describe("VolumeTierPolicy Controller", func() {
 	}
 
 	It("deletes the state when the PVC stops matching", func() {
-		Expect(k8sClient.Create(ctx, newPolicy("policy-a"))).To(Succeed())
-		reconcileVTP("policy-a")
-		Expect(getState().Status.PolicyRef).To(Equal("policy-a"))
+		Expect(k8sClient.Create(ctx, newPolicy(policyA))).To(Succeed())
+		reconcileVTP(policyA)
+		Expect(getState().Status.PolicyRef).To(Equal(policyA))
 
 		By("removing the PVC's label")
 		pvc := &corev1.PersistentVolumeClaim{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: pvcName}, pvc)).To(Succeed())
 		pvc.Labels = nil
 		Expect(k8sClient.Update(ctx, pvc)).To(Succeed())
-		reconcileVTP("policy-a")
+		reconcileVTP(policyA)
 
 		Expect(stateGone()).To(BeTrue())
-		Expect(getPolicy("policy-a").Status.PVCs).To(BeEmpty())
+		Expect(getPolicy(policyA).Status.PVCs).To(BeEmpty())
 	})
 
 	It("deletes its states when the policy is deleted", func() {
-		Expect(k8sClient.Create(ctx, newPolicy("policy-a"))).To(Succeed())
-		reconcileVTP("policy-a")
-		Expect(getState().Status.PolicyRef).To(Equal("policy-a"))
+		Expect(k8sClient.Create(ctx, newPolicy(policyA))).To(Succeed())
+		reconcileVTP(policyA)
+		Expect(getState().Status.PolicyRef).To(Equal(policyA))
 
 		By("deleting the policy; the finalizer removes its states")
-		Expect(k8sClient.Delete(ctx, getPolicy("policy-a"))).To(Succeed())
-		reconcileVTP("policy-a")
+		Expect(k8sClient.Delete(ctx, getPolicy(policyA))).To(Succeed())
+		reconcileVTP(policyA)
 
 		Expect(stateGone()).To(BeTrue())
 		Expect(errors.IsNotFound(k8sClient.Get(ctx,
-			types.NamespacedName{Namespace: namespace, Name: "policy-a"}, &zanderykgithubiov1.VolumeTierPolicy{}))).To(BeTrue())
+			types.NamespacedName{Namespace: namespace, Name: policyA}, &zanderykgithubiov1.VolumeTierPolicy{}))).To(BeTrue())
+	})
+
+	Describe("watch mappings", func() {
+		It("maps a PVC or policy event to every policy in the same namespace", func() {
+			Expect(k8sClient.Create(ctx, newPolicy(policyA))).To(Succeed())
+			Expect(k8sClient.Create(ctx, newPolicy(policyB))).To(Succeed())
+			r := &VolumeTierPolicyReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			want := []reconcile.Request{
+				{Namespace: namespace, Name: policyA},
+				{Namespace: namespace, Name: policyB},
+			}
+
+			pvc := &corev1.PersistentVolumeClaim{Name: pvcName, Namespace: namespace}
+			Expect(r.policiesInNamespace(ctx, pvc)).To(ConsistOf(want))
+			Expect(r.policiesInNamespace(ctx, getPolicy(policyA))).To(ConsistOf(want))
+
+			elsewhere := &corev1.PersistentVolumeClaim{Name: pvcName, Namespace: "other"}
+			Expect(r.policiesInNamespace(ctx, elsewhere)).To(BeEmpty())
+		})
+
+		It("maps a policy to the states it manages", func() {
+			Expect(k8sClient.Create(ctx, newPolicy(policyA))).To(Succeed())
+			reconcileVTP(policyA)
+			r := &VolumeTierStateReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+
+			Expect(r.statesForPolicy(ctx, getPolicy(policyA))).To(ConsistOf(
+				reconcile.Request{Namespace: namespace, Name: pvcName}))
+
+			other := &zanderykgithubiov1.VolumeTierPolicy{Name: policyB, Namespace: namespace}
+			Expect(r.statesForPolicy(ctx, other)).To(BeEmpty())
+		})
 	})
 })
