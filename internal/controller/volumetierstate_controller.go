@@ -32,9 +32,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	tierdv1 "github.com/zanderyk/tierd/api/v1"
 )
+
+// statePolicyRefIndex indexes VolumeTierStates by status.policyRef, so a
+// policy change can find the states it manages.
+const statePolicyRefIndex = ".status.policyRef"
 
 // ConditionVTSManaged reports whether a policy is actively managing the PVC.
 const ConditionVTSManaged = "Managed"
@@ -181,12 +186,39 @@ func setManaged(vts *tierdv1.VolumeTierState, status metav1.ConditionStatus, rea
 	})
 }
 
+// statesForPolicy maps a VolumeTierPolicy to the VolumeTierStates it manages.
+func (r *VolumeTierStateReconciler) statesForPolicy(ctx context.Context, obj client.Object) []reconcile.Request {
+	states := &tierdv1.VolumeTierStateList{}
+	if err := r.List(
+		ctx,
+		states,
+		client.InNamespace(obj.GetNamespace()),
+		client.MatchingFields{statePolicyRefIndex: obj.GetName()},
+	); err != nil {
+		logf.FromContext(ctx).Error(err, "Failed to list VolumeTierStates for VolumeTierPolicy", "name", obj.GetName())
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(states.Items))
+	for _, st := range states.Items {
+		reqs = append(reqs, reconcile.Request{Namespace: st.Namespace, Name: st.Name})
+	}
+	return reqs
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *VolumeTierStateReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &tierdv1.VolumeTierState{}, statePolicyRefIndex,
+		func(obj client.Object) []string {
+			return []string{obj.(*tierdv1.VolumeTierState).Status.PolicyRef}
+		}); err != nil {
+		return fmt.Errorf("cannot index VolumeTierState policyRef: %w", err)
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&tierdv1.VolumeTierState{}).
 		Named("volumetierstate").
 		Watches(&corev1.PersistentVolumeClaim{}, &handler.EnqueueRequestForObject{}).
 		Watches(&tierdv1.VolumeIOSample{}, &handler.EnqueueRequestForObject{}).
+		Watches(&tierdv1.VolumeTierPolicy{}, handler.EnqueueRequestsFromMapFunc(r.statesForPolicy)).
 		Complete(r)
 }

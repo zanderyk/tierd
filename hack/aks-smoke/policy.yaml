@@ -21,7 +21,7 @@ spec:
     ioPressureAbove: 20
     latencyP95AboveMs: 20
     utilizationAbove: 80
-    for: 10m
+    for: 1m
   scaleDown:
     utilizationBelow: 30
     ioPressureBelow: 1

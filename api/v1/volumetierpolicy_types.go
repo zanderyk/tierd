@@ -129,8 +129,11 @@ func (t *Tier) String() string {
 	return fmt.Sprintf("name=%s,iops=%s,tpmibps=%s", t.VACName, iops, tp)
 }
 
-// VolumeTierPolicySpec defines the desired state of VolumeTierPolicy
+// +kubebuilder:printcolumn:name="Mode",type=string,JSONPath=".spec.mode"
+//
 // +kubebuilder:validation:XValidation:rule="!has(self.scaleDown) || !has(self.scaleUp.utilizationAbove) || self.scaleDown.utilizationBelow < self.scaleUp.utilizationAbove",message="scaleDown.utilizationBelow must be lower than scaleUp.utilizationAbove"
+//
+// VolumeTierPolicySpec defines the desired state of VolumeTierPolicy
 type VolumeTierPolicySpec struct {
 	// selector decides which PVCs a VolumeTierPolicy manages. If empty,
 	// all PVCs in the namespace will be selected.
