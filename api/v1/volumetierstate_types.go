@@ -108,6 +108,7 @@ type VolumeTierStateStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:selectablefield:JSONPath=".status.policyRef"
 
 // VolumeTierState is the Schema for the volumetierstates API
 type VolumeTierState struct {

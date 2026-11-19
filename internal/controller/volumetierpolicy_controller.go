@@ -41,6 +41,10 @@ import (
 	tierdv1 "github.com/zanderyk/tierd/api/v1"
 )
 
+const (
+	SkipVolumeTierStateAnnotation = "tierd.zanderyk.github.io/skip-volume-tier"
+)
+
 type VTPConditionType string
 
 const (
@@ -109,6 +113,36 @@ func (r *VolumeTierPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+
+	if !vtp.DeletionTimestamp.IsZero() {
+		if controllerutil.ContainsFinalizer(vtp, finalizerName) {
+			states := &tierdv1.VolumeTierStateList{}
+			if err := r.List(ctx, states, client.InNamespace(vtp.Namespace),
+				client.MatchingFields{statePolicyRefIndex: vtp.Name}); err != nil {
+				return ctrl.Result{}, err
+			}
+			for _, st := range states.Items {
+				if err := r.Delete(ctx, &st); client.IgnoreNotFound(err) != nil {
+					return ctrl.Result{}, err
+				}
+			}
+			_ = controllerutil.RemoveFinalizer(vtp, finalizerName)
+			if err := r.Update(ctx, vtp); err != nil {
+				logger.Error(err, "Unable to remove finalizer")
+				return ctrl.Result{}, err
+			}
+		}
+		// Don't reconcile if it's being deleted
+		return ctrl.Result{}, nil
+	}
+
+	if !controllerutil.ContainsFinalizer(vtp, finalizerName) {
+		controllerutil.AddFinalizer(vtp, finalizerName)
+		if err := r.Update(ctx, vtp); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
 	base := vtp.DeepCopy()
 
 	if err := r.validateTiers(ctx, vtp.Spec.Tiers); err != nil {
@@ -128,10 +162,10 @@ func (r *VolumeTierPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, fmt.Errorf("cannot parse labelSelector: %w", err)
 	}
 
-	pvcs := &corev1.PersistentVolumeClaimList{}
+	matchedPVCs := &corev1.PersistentVolumeClaimList{}
 	if err := r.List(
 		ctx,
-		pvcs,
+		matchedPVCs,
 		client.InNamespace(vtp.GetNamespace()),
 		client.MatchingLabelsSelector{Selector: selector},
 	); err != nil {
@@ -145,9 +179,12 @@ func (r *VolumeTierPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, err
 	}
 
-	matched := make([]string, 0, len(pvcs.Items))
+	matched := make([]string, 0, len(matchedPVCs.Items))
 	var conflicts []string
-	for _, pvc := range pvcs.Items {
+	for _, pvc := range matchedPVCs.Items {
+		if pvc.GetAnnotations()[SkipVolumeTierStateAnnotation] == "true" {
+			continue
+		}
 		state, err := r.ensureVolumeTierState(ctx, &pvc)
 		if err != nil {
 			logger.Error(err, "Failed to ensure VolumeTierState", "pvc", pvc.Name)
@@ -167,6 +204,21 @@ func (r *VolumeTierPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		matched = append(matched, pvc.Name)
 	}
 	slices.Sort(matched)
+
+	// remove the VTS that are no longer covered by the labelSelector above
+	states := &tierdv1.VolumeTierStateList{}
+	if err := r.List(ctx, states, client.InNamespace(vtp.Namespace),
+		client.MatchingFields{statePolicyRefIndex: vtp.Name}); err != nil {
+		return ctrl.Result{}, err
+	}
+	for _, st := range states.Items {
+		if slices.Contains(matched, st.Name) {
+			continue
+		}
+		if err := r.Delete(ctx, &st); client.IgnoreNotFound(err) != nil {
+			return ctrl.Result{}, err
+		}
+	}
 
 	setConflict(vtp, conflicts)
 
@@ -346,8 +398,7 @@ func (r *VolumeTierPolicyReconciler) validateVolumeAttributesClasses(ctx context
 // validateTierSpec checks that tiers form a usable ladder: at least two
 // tiers, unique non-empty names, and ceilings that strictly increase from the
 // first (lowest) tier to the last (highest), per metric. Tiers that do not
-// declare a metric are skipped when comparing that metric. All problems are
-// returned together.
+// declare a metric are skipped when comparing that metric.
 func validateTierSpec(tiers []tierdv1.Tier) error {
 	var errs []error
 
@@ -409,6 +460,18 @@ func (r *VolumeTierPolicyReconciler) policiesForVAC(ctx context.Context, obj cli
 	return reqs
 }
 
+func (r *VolumeTierPolicyReconciler) policiesForPVC(ctx context.Context, obj client.Object) []reconcile.Request {
+	policies := &tierdv1.VolumeTierPolicyList{}
+	if err := r.List(ctx, policies, client.InNamespace(obj.GetNamespace())); err != nil {
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(policies.Items))
+	for _, p := range policies.Items {
+		reqs = append(reqs, reconcile.Request{Namespace: p.Namespace, Name: p.Name})
+	}
+	return reqs
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *VolumeTierPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &tierdv1.VolumeTierPolicy{}, tierVACNameIndex,
@@ -425,6 +488,7 @@ func (r *VolumeTierPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&tierdv1.VolumeTierPolicy{}).
+		Watches(&corev1.PersistentVolumeClaim{}, handler.EnqueueRequestsFromMapFunc(r.policiesForPVC)).
 		Watches(&storagev1.VolumeAttributesClass{}, handler.EnqueueRequestsFromMapFunc(r.policiesForVAC)).
 		Named("volumetierpolicy").
 		Complete(r)

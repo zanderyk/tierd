@@ -39,7 +39,7 @@ import (
 
 // statePolicyRefIndex indexes VolumeTierStates by status.policyRef, so a
 // policy change can find the states it manages.
-const statePolicyRefIndex = ".status.policyRef"
+const statePolicyRefIndex = "status.policyRef"
 
 // ConditionVTSManaged reports whether a policy is actively managing the PVC.
 const ConditionVTSManaged = "Managed"

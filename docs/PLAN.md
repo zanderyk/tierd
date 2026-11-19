@@ -9,15 +9,15 @@ Think "VPA for disks."
 | Area | State |
 |---|---|
 | CRDs (`VolumeTierPolicy`, `VolumeTierState`, `VolumeIOSample`) | Done |
-| Policy reconciler (§7.1) | Done: tier validation (`Ready`), `VolumeTierState` per matched PVC, `status.policyRef`, `Conflict` condition, 5-minute resync. Not yet: releasing PVCs that stop matching; PVC/neighbour-policy watches (the resync covers them for now). |
+| Policy reconciler (§7.1) | Done: tier validation (`Ready`), `VolumeTierState` per matched PVC, `status.policyRef`, `Conflict` condition, 5-minute resync. Not yet: deleting states of PVCs that stop matching; PVC/neighbour-policy watches (the resync covers them for now). |
 | Node agent (§5.1) | Done for filesystem-mode block volumes: diskstats + pod PSI, `VolumeIOSample` per managed PV. Not yet: `/metrics`, block-mode volumes, NFS. |
 | State reconciler (§7.2) | Not started (scaffold only). Next up. |
 | Act mode, cooldowns, infeasible handling | Not started |
 | Tests | envtest for the policy reconciler; unit tests for procfs parsing, windowing, volume discovery and cgroup lookup |
 | Cloud validation | AKS smoke test in `hack/aks-smoke` (Premium SSD v2, fio) |
 
-Next, in order: state reconciler in Recommend mode → Act mode → release
-unmatched PVCs → replace the resync with watches → agent `/metrics`,
+Next, in order: state reconciler in Recommend mode → Act mode → delete
+states of unmatched PVCs → replace the resync with watches → agent `/metrics`,
 block-mode and an explicit NFS skip → kind e2e.
 
 ---
@@ -278,15 +278,15 @@ for each matched PVC:
   ensure VolumeTierState(name = PVC name) exists, ownerRef → PVC
   status.policyRef = owners[0] if len(owners) == 1, else ""   (conflict)
 for each VolumeTierState whose PVC no longer matches its policy:
-  status.policyRef = ""    (keep the object so cooldown history survives re-matching)
+  delete it    (re-matching starts from a fresh state)
 policy.status = {matchedVolumes, conditions: Ready, Conflict}
 requeue after 5m
 ```
 
 As built: policies with invalid selectors are skipped when computing owners.
 The conflict message lists each PVC with the policies claiming it, e.g.
-`data (policy-a, policy-b)`. Releasing PVCs that no longer match is not yet
-implemented, and PVC and neighbouring-policy watches are replaced for now by
+`data (policy-a, policy-b)`. Deleting states of PVCs that no longer match is not
+yet implemented, and PVC and neighbouring-policy watches are replaced for now by
 the 5-minute requeue.
 
 The policy reconciler never touches PVC specs.
@@ -350,8 +350,12 @@ write state.status
 - A PVC matched by several policies is left unmanaged and flagged on each policy.
 - Do not patch while a capacity resize is in progress. Some drivers coalesce
   expand and modify (EBS does), but don't rely on it.
-- Losing a `VolumeTierState` loses history: on (re)creation, take no action
-  until a full `for` window has been observed.
+- A `VolumeTierState` is deleted when its PVC stops matching (or its policy
+  is deleted), so its history goes with it. A new state takes no action until
+  a full `for` window has been observed. Swapping policies on a PVC can
+  therefore land inside a provider's modification cooldown; that is the
+  user's responsibility, and the driver's rejection is handled as a failed
+  modification (TIERD-005).
 
 ## 8. Driver support (verify before release)
 

@@ -84,8 +84,8 @@ var _ = Describe("VolumeTierPolicy Controller", func() {
 	}
 
 	// forceDelete removes obj and waits until it is gone. envtest runs no
-	// controllers, so protection finalizers (pvc-protection, vac-protection)
-	// are stripped by hand.
+	// controllers, so finalizers (pvc-protection, vac-protection, and the
+	// policy finalizer) are stripped by hand.
 	forceDelete := func(obj client.Object) {
 		key := client.ObjectKeyFromObject(obj)
 		err := k8sClient.Get(ctx, key, obj)
@@ -126,7 +126,11 @@ var _ = Describe("VolumeTierPolicy Controller", func() {
 
 	AfterEach(func() {
 		By("cleaning up policies, state, PVC and VolumeAttributesClasses")
-		Expect(k8sClient.DeleteAllOf(ctx, &zanderykgithubiov1.VolumeTierPolicy{}, client.InNamespace(namespace))).To(Succeed())
+		policies := &zanderykgithubiov1.VolumeTierPolicyList{}
+		Expect(k8sClient.List(ctx, policies, client.InNamespace(namespace))).To(Succeed())
+		for i := range policies.Items {
+			forceDelete(&policies.Items[i])
+		}
 		deleteIgnoreNotFound(&zanderykgithubiov1.VolumeTierState{Name: pvcName, Namespace: namespace})
 
 		forceDelete(&corev1.PersistentVolumeClaim{Name: pvcName, Namespace: namespace})
@@ -173,6 +177,9 @@ var _ = Describe("VolumeTierPolicy Controller", func() {
 
 		By("deleting one policy; the survivor claims the PVC on its next reconcile")
 		Expect(k8sClient.Delete(ctx, getPolicy("policy-b"))).To(Succeed())
+		reconcileVTP("policy-b") // runs the finalizer, which lets the delete finish
+		Expect(errors.IsNotFound(k8sClient.Get(ctx,
+			types.NamespacedName{Namespace: namespace, Name: "policy-b"}, &zanderykgithubiov1.VolumeTierPolicy{}))).To(BeTrue())
 		reconcileVTP("policy-a")
 
 		Expect(getState().Status.PolicyRef).To(Equal("policy-a"))
