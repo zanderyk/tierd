@@ -190,8 +190,9 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.VolumeTierStateReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("tierd"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "volumetierstate")
 		os.Exit(1)

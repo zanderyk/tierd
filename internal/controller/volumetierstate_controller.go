@@ -28,6 +28,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -56,13 +58,16 @@ var errPVCNotBound = errors.New("PVC is not bound")
 // VolumeTierStateReconciler reconciles a VolumeTierState object
 type VolumeTierStateReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder events.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=tierd.zanderyk.github.io,resources=volumetierstates,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=tierd.zanderyk.github.io,resources=volumetierstates/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=tierd.zanderyk.github.io,resources=volumetierstates/finalizers,verbs=update
 // +kubebuilder:rbac:groups=tierd.zanderyk.github.io,resources=volumeiosamples,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=patch
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
 func (r *VolumeTierStateReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := logf.FromContext(ctx)
@@ -131,17 +136,49 @@ func (r *VolumeTierStateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	dir, why := r.Evaluate(vtp, vts.Status.CurrentTier, vioSample)
-	requeue := recommend(&vts.Status, vtp.Spec, dir, why, time.Now())
+	scaleDirection, why := r.Evaluate(vtp, vts.Status.CurrentTier, vioSample)
+	requeue := recommend(&vts.Status, vtp.Spec, scaleDirection, why, time.Now())
 
-	setManaged(vts, metav1.ConditionTrue, ConditionReasonPolicyMatched,
-		fmt.Sprintf("Managed by VolumeTierPolicy %s", vts.Status.PolicyRef))
+	if shouldAct(vtp, vts, pvc) {
+		pvcBase := pvc.DeepCopy()
+		pvc.Spec.VolumeAttributesClassName = new(vts.Status.RecommendedTier)
+		if err := r.Patch(ctx, pvc, client.MergeFrom(pvcBase)); err != nil {
+			return ctrl.Result{}, err
+		}
+
+		now := metav1.Now()
+		vts.Status.LastAppliedTier = vts.Status.RecommendedTier
+		vts.Status.LastModified = &now
+		// Start the stopwatch fresh on the new tier
+		vts.Status.PendingDirection = tierdv1.ScaleDirectionNone
+		vts.Status.PendingSince = nil
+		r.Recorder.Eventf(pvc, vts, corev1.EventTypeNormal, "TierChanged", "ChangeTier", "Changed tier from %s to %s (policy: %s): %s", vts.Status.CurrentTier, vts.Status.RecommendedTier, vtp.GetName(), vts.Status.Reason)
+	}
+
+	setManaged(vts, metav1.ConditionTrue, ConditionReasonPolicyMatched, fmt.Sprintf("Managed by VolumeTierPolicy %s", vts.Status.PolicyRef))
+
 	if err := r.patchStatus(ctx, vts, base); err != nil {
 		return ctrl.Result{}, err
 	}
 
 	// Come back when the pending window ends, even if no new sample arrives.
 	return ctrl.Result{RequeueAfter: requeue}, nil
+}
+
+// shouldAct reports whether the controller should move the PVC to the
+// recommended tier now.
+func shouldAct(vtp *tierdv1.VolumeTierPolicy, vts *tierdv1.VolumeTierState, pvc *corev1.PersistentVolumeClaim) bool {
+	st := vts.Status
+	switch {
+	case vtp.Spec.Mode != tierdv1.VolumeTierPolicyModeAct:
+		return false
+	case st.RecommendedTier == "" || st.RecommendedTier == st.CurrentTier:
+		return false
+	case ptr.Deref(pvc.Spec.VolumeAttributesClassName, "") != st.CurrentTier:
+		return false // change is already in flight
+	}
+	// TODO: do we need a cooldown to check storage provider's QoS implementations?
+	return true
 }
 
 // Evaluate runs the logic for a VolumeTierState deciding if there should

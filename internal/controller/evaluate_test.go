@@ -18,18 +18,27 @@ package controller
 
 import (
 	"testing"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"k8s.io/apimachinery/pkg/api/resource"
 
 	tierdv1 "github.com/zanderyk/tierd/api/v1"
 )
 
+const (
+	tierBase = "base"
+	tierFast = "fast"
+)
+
 func TestWantDirection(t *testing.T) {
 	// Same shape as hack/aks-smoke/policy.yaml.
 	spec := tierdv1.VolumeTierPolicySpec{
 		Tiers: []tierdv1.Tier{
-			{VACName: "base", Ceilings: &tierdv1.Ceiling{IOPS: new(int64(3000)), ThroughputMiBPS: new(int64(125))}},
-			{VACName: "fast", Ceilings: &tierdv1.Ceiling{IOPS: new(int64(5000)), ThroughputMiBPS: new(int64(200))}},
+			{VACName: tierBase, Ceilings: &tierdv1.Ceiling{IOPS: new(int64(3000)), ThroughputMiBPS: new(int64(125))}},
+			{VACName: tierFast, Ceilings: &tierdv1.Ceiling{IOPS: new(int64(5000)), ThroughputMiBPS: new(int64(200))}},
 		},
 		ScaleUp: tierdv1.ScaleUp{
 			IOPressureAbove:   new(int32(20)),
@@ -61,6 +70,99 @@ func TestWantDirection(t *testing.T) {
 			got, why := wantDirection(spec, tt.tier, tt.sample)
 			if got != tt.want {
 				t.Errorf("got %q (%s), want %q", got, why, tt.want)
+			}
+		})
+	}
+}
+
+func TestRecommend(t *testing.T) {
+	spec := tierdv1.VolumeTierPolicySpec{
+		Tiers:     []tierdv1.Tier{{VACName: tierBase}, {VACName: tierFast}},
+		ScaleUp:   tierdv1.ScaleUp{For: metav1.Duration{Duration: 10 * time.Minute}},
+		ScaleDown: &tierdv1.ScaleDown{For: metav1.Duration{Duration: time.Hour}},
+	}
+	start := time.Date(2026, 11, 19, 10, 0, 0, 0, time.UTC)
+	at := func(m int) time.Time { return start.Add(time.Duration(m) * time.Minute) }
+
+	// One PVC on tierBase, fed a sequence of directions over time.
+	st := &tierdv1.VolumeTierStateStatus{CurrentTier: tierBase}
+	steps := []struct {
+		name      string
+		minute    int
+		dir       tierdv1.ScaleDirection
+		wantTier  string
+		wantAfter time.Duration
+	}{
+		{"load starts: stopwatch starts", 0, tierdv1.ScaleDirectionUp, tierBase, 10 * time.Minute},
+		{"still loaded, window not over", 4, tierdv1.ScaleDirectionUp, tierBase, 6 * time.Minute},
+		{"load drops: stopwatch resets", 5, tierdv1.ScaleDirectionNone, tierBase, 0},
+		{"load returns: starts again", 6, tierdv1.ScaleDirectionUp, tierBase, 10 * time.Minute},
+		{"held for the full window", 16, tierdv1.ScaleDirectionUp, tierFast, 0},
+	}
+	for _, s := range steps {
+		after := recommend(st, spec, s.dir, "busy", at(s.minute))
+		if st.RecommendedTier != s.wantTier || after != s.wantAfter {
+			t.Fatalf("%s: got tier %q, requeue %v; want %q, %v",
+				s.name, st.RecommendedTier, after, s.wantTier, s.wantAfter)
+		}
+	}
+	if st.Reason != "busy for 10m0s" {
+		t.Errorf("Reason = %q", st.Reason)
+	}
+}
+
+func TestRecommendDownUsesScaleDownWindow(t *testing.T) {
+	spec := tierdv1.VolumeTierPolicySpec{
+		Tiers:     []tierdv1.Tier{{VACName: tierBase}, {VACName: tierFast}},
+		ScaleUp:   tierdv1.ScaleUp{For: metav1.Duration{Duration: 10 * time.Minute}},
+		ScaleDown: &tierdv1.ScaleDown{For: metav1.Duration{Duration: time.Hour}},
+	}
+	now := time.Date(2026, 11, 19, 10, 0, 0, 0, time.UTC)
+	st := &tierdv1.VolumeTierStateStatus{CurrentTier: tierFast}
+
+	recommend(st, spec, tierdv1.ScaleDirectionDown, "idle", now)
+	if after := recommend(st, spec, tierdv1.ScaleDirectionDown, "idle", now.Add(30*time.Minute)); after != 30*time.Minute {
+		t.Errorf("after 30m of a 1h window: requeue %v, want 30m", after)
+	}
+	recommend(st, spec, tierdv1.ScaleDirectionDown, "idle", now.Add(time.Hour))
+	if st.RecommendedTier != tierBase {
+		t.Errorf("RecommendedTier = %q, want base", st.RecommendedTier)
+	}
+}
+
+func TestShouldAct(t *testing.T) {
+	policy := func(mode tierdv1.VolumeTierPolicyMode) *tierdv1.VolumeTierPolicy {
+		return &tierdv1.VolumeTierPolicy{Spec: tierdv1.VolumeTierPolicySpec{Mode: mode}}
+	}
+	state := func(current, recommended string) *tierdv1.VolumeTierState {
+		return &tierdv1.VolumeTierState{Status: tierdv1.VolumeTierStateStatus{
+			CurrentTier: current, RecommendedTier: recommended,
+		}}
+	}
+	pvc := func(specVAC string) *corev1.PersistentVolumeClaim {
+		return &corev1.PersistentVolumeClaim{Spec: corev1.PersistentVolumeClaimSpec{
+			VolumeAttributesClassName: &specVAC,
+		}}
+	}
+	act, rec := tierdv1.VolumeTierPolicyModeAct, tierdv1.VolumeTierPolicyModeRecommend
+
+	tests := []struct {
+		name   string
+		policy *tierdv1.VolumeTierPolicy
+		state  *tierdv1.VolumeTierState
+		pvc    *corev1.PersistentVolumeClaim
+		want   bool
+	}{
+		{"act mode with a new recommendation", policy(act), state(tierBase, tierFast), pvc(tierBase), true},
+		{"recommend mode never acts", policy(rec), state(tierBase, tierFast), pvc(tierBase), false},
+		{"recommendation equals current tier", policy(act), state(tierBase, tierBase), pvc(tierBase), false},
+		{"no recommendation yet", policy(act), state(tierBase, ""), pvc(tierBase), false},
+		{"change already in flight", policy(act), state(tierBase, tierFast), pvc(tierFast), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldAct(tt.policy, tt.state, tt.pvc); got != tt.want {
+				t.Errorf("shouldAct = %v, want %v", got, tt.want)
 			}
 		})
 	}
