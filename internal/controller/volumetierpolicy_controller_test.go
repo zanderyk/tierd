@@ -185,4 +185,39 @@ var _ = Describe("VolumeTierPolicy Controller", func() {
 		Expect(getState().Status.PolicyRef).To(Equal("policy-a"))
 		Expect(meta.IsStatusConditionFalse(getPolicy("policy-a").Status.Conditions, string(ConditionVTPConflict))).To(BeTrue())
 	})
+
+	stateGone := func() bool {
+		return errors.IsNotFound(k8sClient.Get(ctx,
+			types.NamespacedName{Namespace: namespace, Name: pvcName}, &zanderykgithubiov1.VolumeTierState{}))
+	}
+
+	It("deletes the state when the PVC stops matching", func() {
+		Expect(k8sClient.Create(ctx, newPolicy("policy-a"))).To(Succeed())
+		reconcileVTP("policy-a")
+		Expect(getState().Status.PolicyRef).To(Equal("policy-a"))
+
+		By("removing the PVC's label")
+		pvc := &corev1.PersistentVolumeClaim{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: pvcName}, pvc)).To(Succeed())
+		pvc.Labels = nil
+		Expect(k8sClient.Update(ctx, pvc)).To(Succeed())
+		reconcileVTP("policy-a")
+
+		Expect(stateGone()).To(BeTrue())
+		Expect(getPolicy("policy-a").Status.PVCs).To(BeEmpty())
+	})
+
+	It("deletes its states when the policy is deleted", func() {
+		Expect(k8sClient.Create(ctx, newPolicy("policy-a"))).To(Succeed())
+		reconcileVTP("policy-a")
+		Expect(getState().Status.PolicyRef).To(Equal("policy-a"))
+
+		By("deleting the policy; the finalizer removes its states")
+		Expect(k8sClient.Delete(ctx, getPolicy("policy-a"))).To(Succeed())
+		reconcileVTP("policy-a")
+
+		Expect(stateGone()).To(BeTrue())
+		Expect(errors.IsNotFound(k8sClient.Get(ctx,
+			types.NamespacedName{Namespace: namespace, Name: "policy-a"}, &zanderykgithubiov1.VolumeTierPolicy{}))).To(BeTrue())
+	})
 })
