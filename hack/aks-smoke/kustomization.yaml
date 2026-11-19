@@ -6,5 +6,7 @@ resources:
 - namespace.yaml
 - vacs.yaml
 - pvc.yaml
+- pvc2.yaml
 - fio.yaml
+- fio2.yaml
 - policy.yaml

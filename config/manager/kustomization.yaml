@@ -5,4 +5,4 @@ kind: Kustomization
 images:
 - name: controller
   newName: example.azurecr.io/tierd
-  newTag: dev-1795064133
+  newTag: dev-1795118279

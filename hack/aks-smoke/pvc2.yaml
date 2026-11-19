@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: data2
+  namespace: tierd-test
+  labels:
+    app: tierd-test2
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: managed-csi-premium-v2
+  volumeAttributesClassName: tierd-test-base
+  resources:
+    requests:
+      storage: 10Gi
