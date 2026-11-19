@@ -18,32 +18,27 @@ package controller
 
 import (
 	"fmt"
+	"slices"
+	"time"
 
 	tierdv1 "github.com/zanderyk/tierd/api/v1"
-)
-
-type scaleDirection string
-
-const (
-	scaleDirectionUp   scaleDirection = "Up"
-	scaleDirectionDown scaleDirection = "Down"
-	scaleDirectionNone scaleDirection = ""
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // wantDirection reports which way the sample pushes a PVC on tiers[tier]
 // right now, and why. It ignores the `for` windows.
-func wantDirection(spec tierdv1.VolumeTierPolicySpec, tier int, s tierdv1.VolumeIOSampleStatus) (scaleDirection, string) {
+func wantDirection(spec tierdv1.VolumeTierPolicySpec, tier int, s tierdv1.VolumeIOSampleStatus) (tierdv1.ScaleDirection, string) {
 	if tier < len(spec.Tiers)-1 {
 		if why, ok := scaleUpHolds(spec.ScaleUp, spec.Tiers[tier], s); ok {
-			return scaleDirectionUp, why
+			return tierdv1.ScaleDirectionUp, why
 		}
 	}
 	if spec.ScaleDown != nil && tier > 0 {
 		if why, ok := scaleDownHolds(*spec.ScaleDown, spec.Tiers[tier-1], s); ok {
-			return scaleDirectionDown, why
+			return tierdv1.ScaleDirectionDown, why
 		}
 	}
-	return scaleDirectionNone, ""
+	return tierdv1.ScaleDirectionNone, ""
 }
 
 // scaleUpHolds is true if any configured trigger holds.
@@ -107,4 +102,57 @@ func pressure(s tierdv1.VolumeIOSampleStatus) (float64, bool) {
 		return 0, false
 	}
 	return s.IOPressureSomeAvg60.AsApproximateFloat64(), true
+}
+
+// recommend applies the `for` window to dir and updates st.PendingDirection,
+// st.PendingSince, st.RecommendedTier and st.Reason. It returns how long until
+// the pending window ends, or 0 if nothing is pending.
+//   - direction changed → save it, PendingSince = now
+//   - direction None → recommend current tier, return 0
+//   - waited < `for` → recommend current tier, return time left
+//   - waited >= `for` → recommend next tier in dir, return 0
+func recommend(
+	st *tierdv1.VolumeTierStateStatus,
+	spec tierdv1.VolumeTierPolicySpec,
+	direction tierdv1.ScaleDirection,
+	why string,
+	now time.Time,
+) time.Duration {
+	if direction != st.PendingDirection {
+		st.PendingDirection = direction
+		st.PendingSince = new(metav1.NewTime(now))
+	}
+	if direction == tierdv1.ScaleDirectionNone {
+		st.PendingSince = nil
+		st.RecommendedTier = st.CurrentTier
+		st.Reason = ""
+		return 0
+	}
+
+	window := spec.ScaleUp.For.Duration
+	if direction == tierdv1.ScaleDirectionDown {
+		window = spec.ScaleDown.For.Duration
+	}
+
+	waited := now.Sub(st.PendingSince.Time)
+	if waited < window {
+		st.RecommendedTier = st.CurrentTier
+		st.Reason = fmt.Sprintf("%s for %s of %s", why, waited.Round(time.Second), window)
+		return window - waited
+	}
+
+	i := tierIndex(spec, st.CurrentTier)
+	if direction == tierdv1.ScaleDirectionUp {
+		i++
+	} else {
+		i--
+	}
+	st.RecommendedTier = spec.Tiers[i].VACName
+	st.Reason = fmt.Sprintf("%s for %s", why, waited.Round(time.Minute))
+	return 0
+}
+
+// tierIndex is the position of the named tier in spec.Tiers, or -1.
+func tierIndex(spec tierdv1.VolumeTierPolicySpec, name string) int {
+	return slices.IndexFunc(spec.Tiers, func(t tierdv1.Tier) bool { return t.VACName == name })
 }

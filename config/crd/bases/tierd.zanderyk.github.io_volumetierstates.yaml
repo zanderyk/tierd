@@ -172,6 +172,19 @@ spec:
                 description: lastModified is the time the status was last modified.
                 format: date-time
                 type: string
+              pendingDirection:
+                description: |-
+                  pendingDirection is the direction the latest sample pushes the PVC
+                  in, if any. It must hold for the policy's `for` window before
+                  recommendedTier changes.
+                enum:
+                - Up
+                - Down
+                type: string
+              pendingSince:
+                description: pendingSince is when pendingDirection last changed.
+                format: date-time
+                type: string
               policyRef:
                 description: policyRef is the VolumeTierPolicy controlling this PVC.
                 type: string

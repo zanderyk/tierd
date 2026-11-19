@@ -44,17 +44,17 @@ func TestWantDirection(t *testing.T) {
 		name   string
 		tier   int
 		sample tierdv1.VolumeIOSampleStatus
-		want   scaleDirection
+		want   tierdv1.ScaleDirection
 	}{
-		{"idle on base stays", 0, tierdv1.VolumeIOSampleStatus{IOPS: 10, IOPressureSomeAvg60: psi("0")}, scaleDirectionNone},
-		{"iops near base ceiling", 0, tierdv1.VolumeIOSampleStatus{IOPS: 3060}, scaleDirectionUp},
-		{"throughput near base ceiling", 0, tierdv1.VolumeIOSampleStatus{ThroughputBytesPerSecond: 110 << 20}, scaleDirectionUp},
-		{"high latency", 0, tierdv1.VolumeIOSampleStatus{LatencyP95Micros: 25_000}, scaleDirectionUp},
-		{"high pressure", 0, tierdv1.VolumeIOSampleStatus{IOPressureSomeAvg60: psi("35")}, scaleDirectionUp},
-		{"busy on top tier stays", 1, tierdv1.VolumeIOSampleStatus{IOPS: 4900}, scaleDirectionNone},
-		{"quiet on fast goes down", 1, tierdv1.VolumeIOSampleStatus{IOPS: 300, IOPressureSomeAvg60: psi("0")}, scaleDirectionDown},
-		{"too busy for base stays", 1, tierdv1.VolumeIOSampleStatus{IOPS: 2000, IOPressureSomeAvg60: psi("0")}, scaleDirectionNone},
-		{"unknown pressure blocks down", 1, tierdv1.VolumeIOSampleStatus{IOPS: 300}, scaleDirectionNone},
+		{"idle on base stays", 0, tierdv1.VolumeIOSampleStatus{IOPS: 10, IOPressureSomeAvg60: psi("0")}, tierdv1.ScaleDirectionNone},
+		{"iops near base ceiling", 0, tierdv1.VolumeIOSampleStatus{IOPS: 3060}, tierdv1.ScaleDirectionUp},
+		{"throughput near base ceiling", 0, tierdv1.VolumeIOSampleStatus{ThroughputBytesPerSecond: 110 << 20}, tierdv1.ScaleDirectionUp},
+		{"high latency", 0, tierdv1.VolumeIOSampleStatus{LatencyP95Micros: 25_000}, tierdv1.ScaleDirectionUp},
+		{"high pressure", 0, tierdv1.VolumeIOSampleStatus{IOPressureSomeAvg60: psi("35")}, tierdv1.ScaleDirectionUp},
+		{"busy on top tier stays", 1, tierdv1.VolumeIOSampleStatus{IOPS: 4900}, tierdv1.ScaleDirectionNone},
+		{"quiet on fast goes down", 1, tierdv1.VolumeIOSampleStatus{IOPS: 300, IOPressureSomeAvg60: psi("0")}, tierdv1.ScaleDirectionDown},
+		{"too busy for base stays", 1, tierdv1.VolumeIOSampleStatus{IOPS: 2000, IOPressureSomeAvg60: psi("0")}, tierdv1.ScaleDirectionNone},
+		{"unknown pressure blocks down", 1, tierdv1.VolumeIOSampleStatus{IOPS: 300}, tierdv1.ScaleDirectionNone},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

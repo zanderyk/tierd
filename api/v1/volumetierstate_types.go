@@ -23,6 +23,14 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
+type ScaleDirection string
+
+const (
+	ScaleDirectionUp   ScaleDirection = "Up"
+	ScaleDirectionDown ScaleDirection = "Down"
+	ScaleDirectionNone ScaleDirection = ""
+)
+
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
@@ -75,6 +83,15 @@ type VolumeTierStateStatus struct {
 	RecommendedTier string `json:"recommendedTier,omitempty"`
 	// reason is the reason why the PVC's tier was changed.
 	Reason string `json:"reason,omitempty"`
+	// pendingDirection is the direction the latest sample pushes the PVC
+	// in, if any. It must hold for the policy's `for` window before
+	// recommendedTier changes.
+	// +optional
+	// +kubebuilder:validation:Enum=Up;Down
+	PendingDirection ScaleDirection `json:"pendingDirection,omitempty"`
+	// pendingSince is when pendingDirection last changed.
+	// +optional
+	PendingSince *metav1.Time `json:"pendingSince,omitempty"`
 	// lastModified is the time the status was last modified.
 	LastModified *metav1.Time `json:"lastModified,omitempty"`
 	// lastAppliedTier is the prior tier if a change has occurred.

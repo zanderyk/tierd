@@ -20,7 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -127,7 +127,7 @@ func (r *VolumeTierStateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	dir, why := r.Evaluate(vtp, vts.Status.CurrentTier, vioSample)
-	fmt.Println(dir, why)
+	requeue := recommend(&vts.Status, vtp.Spec, dir, why, time.Now())
 
 	setManaged(vts, metav1.ConditionTrue, ConditionReasonPolicyMatched,
 		fmt.Sprintf("Managed by VolumeTierPolicy %s", vts.Status.PolicyRef))
@@ -135,7 +135,8 @@ func (r *VolumeTierStateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
-	return ctrl.Result{}, nil
+	// Come back when the pending window ends, even if no new sample arrives.
+	return ctrl.Result{RequeueAfter: requeue}, nil
 }
 
 // Evaluate runs the logic for a VolumeTierState deciding if there should
@@ -143,10 +144,10 @@ func (r *VolumeTierStateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 //   - Scale up if _any_ threshold is exceeded
 //   - Scale down if _all_ conditions hold
 func (r *VolumeTierStateReconciler) Evaluate(vtp *tierdv1.VolumeTierPolicy,
-	currentTier string, sample *tierdv1.VolumeIOSample) (scaleDirection, string) {
-	i := slices.IndexFunc(vtp.Spec.Tiers, func(t tierdv1.Tier) bool { return t.VACName == currentTier })
+	currentTier string, sample *tierdv1.VolumeIOSample) (tierdv1.ScaleDirection, string) {
+	i := tierIndex(vtp.Spec, currentTier)
 	if i < 0 {
-		return scaleDirectionNone, "current tier is not in the policy"
+		return tierdv1.ScaleDirectionNone, "current tier is not in the policy"
 	}
 	return wantDirection(vtp.Spec, i, sample.Status)
 }
