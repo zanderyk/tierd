@@ -21,11 +21,14 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/client-go/tools/events"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	tierdv1 "github.com/zanderyk/tierd/api/v1"
@@ -147,6 +150,10 @@ func TestShouldAct(t *testing.T) {
 			VolumeAttributesClassName: &specVAC,
 		}}
 	}
+	overridden := func(vts *tierdv1.VolumeTierState) *tierdv1.VolumeTierState {
+		vts.Status.Conditions = []metav1.Condition{{Type: ConditionVTSManualOverride, Status: metav1.ConditionTrue}}
+		return vts
+	}
 	act, rec := tierdv1.VolumeTierPolicyModeAct, tierdv1.VolumeTierPolicyModeRecommend
 
 	tests := []struct {
@@ -161,6 +168,7 @@ func TestShouldAct(t *testing.T) {
 		{"recommendation equals current tier", policy(act), state(tierBase, tierBase), pvc(tierBase), false},
 		{"no recommendation yet", policy(act), state(tierBase, ""), pvc(tierBase), false},
 		{"change already in flight", policy(act), state(tierBase, tierFast), pvc(tierFast), false},
+		{"manual override", policy(act), overridden(state(tierBase, tierFast)), pvc(tierBase), false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -295,6 +303,78 @@ func TestPruneInfeasible(t *testing.T) {
 			}
 			if kept := len(st.InfeasibleTiers) == 1; kept != tt.keep {
 				t.Errorf("kept = %v, want %v", kept, tt.keep)
+			}
+		})
+	}
+}
+
+func TestSyncOverride(t *testing.T) {
+	overridden := []metav1.Condition{{Type: ConditionVTSManualOverride, Status: metav1.ConditionTrue}}
+
+	tests := []struct {
+		name          string
+		specVAC       string
+		annotated     bool
+		status        tierdv1.VolumeTierStateStatus
+		wantOverride  bool
+		wantAnnotated bool
+		wantLast      string
+	}{
+		{
+			name:    "spec matches what tierd set",
+			specVAC: tierFast, status: tierdv1.VolumeTierStateStatus{LastAppliedTier: tierFast},
+			wantLast: tierFast,
+		},
+		{
+			name:    "tier changed by hand",
+			specVAC: tierBase, status: tierdv1.VolumeTierStateStatus{LastAppliedTier: tierFast},
+			wantOverride: true, wantAnnotated: true, wantLast: tierFast,
+		},
+		{
+			name:    "tier changed by hand before tierd ever acted",
+			specVAC: tierFast, status: tierdv1.VolumeTierStateStatus{CurrentTier: tierBase},
+			wantOverride: true, wantAnnotated: true,
+		},
+		{
+			name:    "annotated by the user",
+			specVAC: tierBase, annotated: true, status: tierdv1.VolumeTierStateStatus{CurrentTier: tierBase},
+			wantOverride: true, wantAnnotated: true,
+		},
+		{
+			name:    "annotation removed resumes from the spec tier",
+			specVAC: tierBase, status: tierdv1.VolumeTierStateStatus{LastAppliedTier: tierFast, Conditions: overridden},
+			wantLast: tierBase,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pvc := &corev1.PersistentVolumeClaim{
+				Name: "data", Namespace: "default",
+				Spec: corev1.PersistentVolumeClaimSpec{VolumeAttributesClassName: new(tt.specVAC)},
+			}
+			if tt.annotated {
+				pvc.Annotations = map[string]string{ManualOverrideAnnotation: "true"}
+			}
+			c := fake.NewClientBuilder().WithObjects(pvc).Build()
+			r := &VolumeTierStateReconciler{Client: c, Recorder: events.NewFakeRecorder(10)}
+			vts := &tierdv1.VolumeTierState{Status: tt.status}
+
+			if err := r.syncOverride(t.Context(), vts, pvc); err != nil {
+				t.Fatal(err)
+			}
+
+			if got := meta.IsStatusConditionTrue(vts.Status.Conditions, ConditionVTSManualOverride); got != tt.wantOverride {
+				t.Errorf("ManualOverride = %v, want %v", got, tt.wantOverride)
+			}
+			stored := &corev1.PersistentVolumeClaim{}
+			if err := c.Get(t.Context(), client.ObjectKeyFromObject(pvc), stored); err != nil {
+				t.Fatal(err)
+			}
+			if _, got := stored.Annotations[ManualOverrideAnnotation]; got != tt.wantAnnotated {
+				t.Errorf("annotated = %v, want %v", got, tt.wantAnnotated)
+			}
+			if vts.Status.LastAppliedTier != tt.wantLast {
+				t.Errorf("LastAppliedTier = %q, want %q", vts.Status.LastAppliedTier, tt.wantLast)
 			}
 		})
 	}

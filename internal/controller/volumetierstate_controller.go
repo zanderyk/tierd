@@ -48,14 +48,16 @@ const statePolicyRefIndex = "status.policyRef"
 
 // ConditionVTSManaged reports whether a policy is actively managing the PVC.
 const (
-	ConditionVTSManaged   = "Managed"
-	ConditionVTSModifying = "Modifying"
+	ConditionVTSManaged        = "Managed"
+	ConditionVTSModifying      = "Modifying"
+	ConditionVTSManualOverride = "ManualOverride"
 )
 
 const (
-	ConditionReasonPolicyMatched = "PolicyMatched"
-	ConditionReasonInvalidPVC    = "InvalidPVC"
-	ConditionReasonMissingPolicy = "MissingPolicy"
+	ConditionReasonPolicyMatched  = "PolicyMatched"
+	ConditionReasonInvalidPVC     = "InvalidPVC"
+	ConditionReasonMissingPolicy  = "MissingPolicy"
+	ConditionReasonManualOverride = "VolumeAttributesClassManualOverride"
 )
 
 // errPVCNotBound means the PVC exists but has not bound to a volume yet.
@@ -105,6 +107,10 @@ func (r *VolumeTierStateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	// Set PVC's current VolumeAttributesClass
 	if pvc.Status.CurrentVolumeAttributesClassName != nil {
 		vts.Status.CurrentTier = *pvc.Status.CurrentVolumeAttributesClassName
+	}
+
+	if err := r.syncOverride(ctx, vts, pvc); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	policyName := vts.Status.PolicyRef
@@ -184,57 +190,102 @@ func (r *VolumeTierStateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 // a failure it records the tier as infeasible and, in Act mode, rolls back.
 func (r *VolumeTierStateReconciler) checkModify(ctx context.Context, vtp *tierdv1.VolumeTierPolicy,
 	vts *tierdv1.VolumeTierState, pvc *corev1.PersistentVolumeClaim) error {
-	if mvs := pvc.Status.ModifyVolumeStatus; mvs != nil {
-		// Some drivers (Azure) never report Infeasible; they keep the PVC
-		// InProgress and set a ModifyVolumeError condition instead.
-		msg, failed := hasModifyError(pvc)
-		// After a rollback the old error lingers while the target is the
-		// current tier; that's not a new failure.
-		failed = failed && mvs.TargetVolumeAttributesClassName != vts.Status.CurrentTier
-		switch {
-		case mvs.Status == corev1.PersistentVolumeClaimModifyVolumeInfeasible || failed:
-			if msg == "" {
-				msg = "driver rejected the change"
-			}
-			vac := &storagev1.VolumeAttributesClass{}
-			if err := r.Get(ctx, client.ObjectKey{Name: mvs.TargetVolumeAttributesClassName}, vac); client.IgnoreNotFound(err) != nil {
+	mvs := pvc.Status.ModifyVolumeStatus
+	if mvs == nil {
+		setCondition(vts, ConditionVTSModifying, metav1.ConditionFalse, "Idle", "")
+		return nil
+	}
+
+	// Some drivers (Azure) never report Infeasible; they keep the PVC
+	// InProgress and set a ModifyVolumeError condition instead.
+	msg, failed := hasModifyError(pvc)
+
+	failed = failed && mvs.TargetVolumeAttributesClassName != vts.Status.CurrentTier
+	switch {
+	case mvs.Status == corev1.PersistentVolumeClaimModifyVolumeInfeasible || failed:
+		if msg == "" {
+			msg = "driver rejected the change"
+		}
+		vac := &storagev1.VolumeAttributesClass{}
+		if err := r.Get(ctx, client.ObjectKey{Name: mvs.TargetVolumeAttributesClassName}, vac); client.IgnoreNotFound(err) != nil {
+			return err
+		}
+		markInfeasible(&vts.Status, mvs.TargetVolumeAttributesClassName, msg,
+			vac.UID, pvc.Status.Capacity.Storage(), time.Now())
+		setCondition(
+			vts,
+			ConditionVTSModifying,
+			metav1.ConditionFalse,
+			"Failed",
+			"Failed to move to "+mvs.TargetVolumeAttributesClassName,
+		)
+
+		// Rollback VolumeAttributesClass in the event the volume can't be migrated.
+		// Don't undo a tier the user set by hand, even if it failed.
+		if vtp.Spec.Mode == tierdv1.VolumeTierPolicyModeAct &&
+			!meta.IsStatusConditionTrue(vts.Status.Conditions, ConditionVTSManualOverride) &&
+			ptr.Deref(pvc.Spec.VolumeAttributesClassName, "") != vts.Status.CurrentTier {
+			pvcBase := pvc.DeepCopy()
+			pvc.Spec.VolumeAttributesClassName = new(vts.Status.CurrentTier)
+			if err := r.Patch(ctx, pvc, client.MergeFrom(pvcBase)); err != nil {
 				return err
 			}
-			markInfeasible(&vts.Status, mvs.TargetVolumeAttributesClassName, msg,
-				vac.UID, pvc.Status.Capacity.Storage(), time.Now())
-			setCondition(
-				vts,
-				ConditionVTSModifying,
-				metav1.ConditionFalse,
-				"Failed",
-				"Failed to move to "+mvs.TargetVolumeAttributesClassName,
-			)
-
-			// Rollback VolumeAttributesClass in the event the volume can't be migrated.
-			if vtp.Spec.Mode == tierdv1.VolumeTierPolicyModeAct &&
-				ptr.Deref(pvc.Spec.VolumeAttributesClassName, "") != vts.Status.CurrentTier {
-				pvcBase := pvc.DeepCopy()
-				pvc.Spec.VolumeAttributesClassName = new(vts.Status.CurrentTier)
-				if err := r.Patch(ctx, pvc, client.MergeFrom(pvcBase)); err != nil {
-					return err
-				}
-				vts.Status.LastAppliedTier = vts.Status.CurrentTier
-				r.Recorder.Eventf(pvc, vts, corev1.EventTypeWarning, "TierChangeFailed", "RollbackTier",
-					"Could not move to %s; rolled back to %s", mvs.TargetVolumeAttributesClassName, vts.Status.CurrentTier)
-			}
-		case mvs.Status == corev1.PersistentVolumeClaimModifyVolumeInProgress,
-			mvs.Status == corev1.PersistentVolumeClaimModifyVolumePending:
-			// waiting
-			target := mvs.TargetVolumeAttributesClassName
-			if target == "" {
-				target = ptr.Deref(pvc.Spec.VolumeAttributesClassName, "")
-			}
-			setCondition(vts, ConditionVTSModifying, metav1.ConditionTrue, string(mvs.Status), "Moving to "+target)
+			vts.Status.LastAppliedTier = vts.Status.CurrentTier
+			r.Recorder.Eventf(pvc, vts, corev1.EventTypeWarning, "TierChangeFailed", "RollbackTier",
+				"Could not move to %s; rolled back to %s", mvs.TargetVolumeAttributesClassName, vts.Status.CurrentTier)
 		}
-	} else {
-		setCondition(vts, ConditionVTSModifying, metav1.ConditionFalse, "Idle", "")
+	case mvs.Status == corev1.PersistentVolumeClaimModifyVolumeInProgress,
+		mvs.Status == corev1.PersistentVolumeClaimModifyVolumePending:
+		// waiting
+		target := mvs.TargetVolumeAttributesClassName
+		if target == "" {
+			target = ptr.Deref(pvc.Spec.VolumeAttributesClassName, "")
+		}
+		setCondition(vts, ConditionVTSModifying, metav1.ConditionTrue, string(mvs.Status), "Moving to "+target)
 	}
 	return nil
+}
+
+// syncOverride sets the ManualOverride condition from the PVC's annotation.
+// It adds the annotation when someone changes the tier by hand, and resumes
+// from the PVC's current tier once the annotation is removed.
+func (r *VolumeTierStateReconciler) syncOverride(ctx context.Context,
+	vts *tierdv1.VolumeTierState, pvc *corev1.PersistentVolumeClaim) error {
+	specVAC := ptr.Deref(pvc.Spec.VolumeAttributesClassName, "")
+	_, annotated := pvc.Annotations[ManualOverrideAnnotation]
+	wasOverridden := meta.IsStatusConditionTrue(vts.Status.Conditions, ConditionVTSManualOverride)
+	paused := fmt.Sprintf("tierd is paused; remove annotation %s to resume", ManualOverrideAnnotation)
+
+	switch {
+	case annotated:
+		setCondition(vts, ConditionVTSManualOverride, metav1.ConditionTrue, "Annotated", paused)
+	case wasOverridden:
+		// The user removed the annotation: take the current tier as tierd's own.
+		vts.Status.LastAppliedTier = specVAC
+		setCondition(vts, ConditionVTSManualOverride, metav1.ConditionFalse, "Resumed", "")
+	case changedByHand(vts.Status, specVAC):
+		pvcBase := pvc.DeepCopy()
+		metav1.SetMetaDataAnnotation(&pvc.ObjectMeta, ManualOverrideAnnotation, "true")
+		if err := r.Patch(ctx, pvc, client.MergeFrom(pvcBase)); err != nil {
+			return err
+		}
+		r.Recorder.Eventf(pvc, vts, corev1.EventTypeNormal, "ManualOverride", "PauseTiering",
+			"Tier changed by hand to %s; %s", specVAC, paused)
+		setCondition(vts, ConditionVTSManualOverride, metav1.ConditionTrue, "ChangedByHand", paused)
+	default:
+		setCondition(vts, ConditionVTSManualOverride, metav1.ConditionFalse, "NoOverride", "")
+	}
+	return nil
+}
+
+// changedByHand is true if the PVC's spec tier is not the one tierd last
+// set, or, if tierd never set one, not the PVC's current tier.
+func changedByHand(st tierdv1.VolumeTierStateStatus, specVAC string) bool {
+	want := st.LastAppliedTier
+	if want == "" {
+		want = st.CurrentTier
+	}
+	return want != "" && specVAC != want
 }
 
 const (
@@ -336,6 +387,8 @@ func shouldAct(vtp *tierdv1.VolumeTierPolicy, vts *tierdv1.VolumeTierState, pvc 
 	switch {
 	case vtp.Spec.Mode != tierdv1.VolumeTierPolicyModeAct:
 		return false
+	case meta.IsStatusConditionTrue(st.Conditions, ConditionVTSManualOverride):
+		return false // the user picked the tier; leave it
 	case st.RecommendedTier == "" || st.RecommendedTier == st.CurrentTier:
 		return false
 	case ptr.Deref(pvc.Spec.VolumeAttributesClassName, "") != st.CurrentTier:
