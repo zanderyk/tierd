@@ -11,10 +11,43 @@ spec:
     kind: VolumeTierState
     listKind: VolumeTierStateList
     plural: volumetierstates
+    shortNames:
+    - vts
     singular: volumetierstate
   scope: Namespaced
   versions:
-  - name: v1
+  - additionalPrinterColumns:
+    - jsonPath: .status.policyRef
+      name: Policy
+      type: string
+    - jsonPath: .status.currentTier
+      name: Current
+      type: string
+    - jsonPath: .status.recommendedTier
+      name: Recommended
+      type: string
+    - jsonPath: .status.pendingDirection
+      name: Pending
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Managed')].status
+      name: Managed
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Modifying')].status
+      name: Modifying
+      priority: 1
+      type: string
+    - jsonPath: .status.lastAppliedTier
+      name: Last-Tier
+      priority: 1
+      type: string
+    - jsonPath: .status.reason
+      name: Reason
+      priority: 1
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1
     schema:
       openAPIV3Schema:
         description: VolumeTierState is the Schema for the volumetierstates API
@@ -128,14 +161,12 @@ spec:
                       - type: string
                       description: |-
                         capacity is the PVC's size when it was rejected. Some drivers cap
-                        performance by size (e.g. - Azure Premium SSD),
-                        so the entry is dropped if the PVC grows.
+                        performance by size.
                       pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                       x-kubernetes-int-or-string: true
                     message:
                       description: message is the driver's error, taken from the PVC's
                         events, when available.
-                      maxLength: 1024
                       type: string
                     name:
                       description: name is the VolumeAttributesClass that was rejected.

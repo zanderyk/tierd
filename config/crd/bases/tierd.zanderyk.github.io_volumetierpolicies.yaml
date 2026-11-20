@@ -11,10 +11,29 @@ spec:
     kind: VolumeTierPolicy
     listKind: VolumeTierPolicyList
     plural: volumetierpolicies
+    shortNames:
+    - vtp
     singular: volumetierpolicy
   scope: Namespaced
   versions:
-  - name: v1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.mode
+      name: Mode
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: Ready
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Conflict')].status
+      name: Conflict
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Ready')].reason
+      name: Reason
+      priority: 1
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1
     schema:
       openAPIV3Schema:
         description: VolumeTierPolicy is the Schema for the volumetierpolicies API

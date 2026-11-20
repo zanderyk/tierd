@@ -147,7 +147,13 @@ func recommend(
 	} else {
 		i--
 	}
-	st.RecommendedTier = spec.Tiers[i].VACName
+	next := spec.Tiers[i].VACName
+	if until, ok := backoffUntil(*st, next); ok && now.Before(until) {
+		st.RecommendedTier = st.CurrentTier
+		st.Reason = fmt.Sprintf("%s, but %s failed; retrying after %s", why, next, until.UTC().Format(time.RFC3339))
+		return until.Sub(now)
+	}
+	st.RecommendedTier = next
 	st.Reason = fmt.Sprintf("%s for %s", why, waited.Round(time.Minute))
 	return 0
 }

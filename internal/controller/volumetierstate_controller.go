@@ -20,11 +20,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -44,7 +47,10 @@ import (
 const statePolicyRefIndex = "status.policyRef"
 
 // ConditionVTSManaged reports whether a policy is actively managing the PVC.
-const ConditionVTSManaged = "Managed"
+const (
+	ConditionVTSManaged   = "Managed"
+	ConditionVTSModifying = "Modifying"
+)
 
 const (
 	ConditionReasonPolicyMatched = "PolicyMatched"
@@ -67,6 +73,7 @@ type VolumeTierStateReconciler struct {
 // +kubebuilder:rbac:groups=tierd.zanderyk.github.io,resources=volumetierstates/finalizers,verbs=update
 // +kubebuilder:rbac:groups=tierd.zanderyk.github.io,resources=volumeiosamples,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=patch
+// +kubebuilder:rbac:groups=storage.k8s.io,resources=volumeattributesclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
 func (r *VolumeTierStateReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -136,6 +143,10 @@ func (r *VolumeTierStateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	if err := r.pruneInfeasible(ctx, &vts.Status, pvc); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	scaleDirection, why := r.Evaluate(vtp, vts.Status.CurrentTier, vioSample)
 	requeue := recommend(&vts.Status, vtp.Spec, scaleDirection, why, time.Now())
 
@@ -155,6 +166,10 @@ func (r *VolumeTierStateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		r.Recorder.Eventf(pvc, vts, corev1.EventTypeNormal, "TierChanged", "ChangeTier", "Changed tier from %s to %s (policy: %s): %s", vts.Status.CurrentTier, vts.Status.RecommendedTier, vtp.GetName(), vts.Status.Reason)
 	}
 
+	if err := r.checkModify(ctx, vtp, vts, pvc); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	setManaged(vts, metav1.ConditionTrue, ConditionReasonPolicyMatched, fmt.Sprintf("Managed by VolumeTierPolicy %s", vts.Status.PolicyRef))
 
 	if err := r.patchStatus(ctx, vts, base); err != nil {
@@ -163,6 +178,155 @@ func (r *VolumeTierStateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 	// Come back when the pending window ends, even if no new sample arrives.
 	return ctrl.Result{RequeueAfter: requeue}, nil
+}
+
+// checkModify sets the Modifying condition from the PVC's modify status. On
+// a failure it records the tier as infeasible and, in Act mode, rolls back.
+func (r *VolumeTierStateReconciler) checkModify(ctx context.Context, vtp *tierdv1.VolumeTierPolicy,
+	vts *tierdv1.VolumeTierState, pvc *corev1.PersistentVolumeClaim) error {
+	if mvs := pvc.Status.ModifyVolumeStatus; mvs != nil {
+		// Some drivers (Azure) never report Infeasible; they keep the PVC
+		// InProgress and set a ModifyVolumeError condition instead.
+		msg, failed := hasModifyError(pvc)
+		// After a rollback the old error lingers while the target is the
+		// current tier; that's not a new failure.
+		failed = failed && mvs.TargetVolumeAttributesClassName != vts.Status.CurrentTier
+		switch {
+		case mvs.Status == corev1.PersistentVolumeClaimModifyVolumeInfeasible || failed:
+			if msg == "" {
+				msg = "driver rejected the change"
+			}
+			vac := &storagev1.VolumeAttributesClass{}
+			if err := r.Get(ctx, client.ObjectKey{Name: mvs.TargetVolumeAttributesClassName}, vac); client.IgnoreNotFound(err) != nil {
+				return err
+			}
+			markInfeasible(&vts.Status, mvs.TargetVolumeAttributesClassName, msg,
+				vac.UID, pvc.Status.Capacity.Storage(), time.Now())
+			setCondition(
+				vts,
+				ConditionVTSModifying,
+				metav1.ConditionFalse,
+				"Failed",
+				"Failed to move to "+mvs.TargetVolumeAttributesClassName,
+			)
+
+			// Rollback VolumeAttributesClass in the event the volume can't be migrated.
+			if vtp.Spec.Mode == tierdv1.VolumeTierPolicyModeAct &&
+				ptr.Deref(pvc.Spec.VolumeAttributesClassName, "") != vts.Status.CurrentTier {
+				pvcBase := pvc.DeepCopy()
+				pvc.Spec.VolumeAttributesClassName = new(vts.Status.CurrentTier)
+				if err := r.Patch(ctx, pvc, client.MergeFrom(pvcBase)); err != nil {
+					return err
+				}
+				vts.Status.LastAppliedTier = vts.Status.CurrentTier
+				r.Recorder.Eventf(pvc, vts, corev1.EventTypeWarning, "TierChangeFailed", "RollbackTier",
+					"Could not move to %s; rolled back to %s", mvs.TargetVolumeAttributesClassName, vts.Status.CurrentTier)
+			}
+		case mvs.Status == corev1.PersistentVolumeClaimModifyVolumeInProgress,
+			mvs.Status == corev1.PersistentVolumeClaimModifyVolumePending:
+			// waiting
+			target := mvs.TargetVolumeAttributesClassName
+			if target == "" {
+				target = ptr.Deref(pvc.Spec.VolumeAttributesClassName, "")
+			}
+			setCondition(vts, ConditionVTSModifying, metav1.ConditionTrue, string(mvs.Status), "Moving to "+target)
+		}
+	} else {
+		setCondition(vts, ConditionVTSModifying, metav1.ConditionFalse, "Idle", "")
+	}
+	return nil
+}
+
+const (
+	infeasibleBackoff    = 30 * time.Minute
+	infeasibleBackoffMax = 6 * time.Hour
+)
+
+// markInfeasible records that moving to tier failed. vacUID and capacity
+// let pruneInfeasible drop the entry once the class or PVC size changes.
+func markInfeasible(st *tierdv1.VolumeTierStateStatus, tier, message string,
+	vacUID types.UID, capacity *resource.Quantity, now time.Time) {
+	i := slices.IndexFunc(st.InfeasibleTiers, func(t tierdv1.InfeasibleTier) bool { return t.Name == tier })
+
+	if i < 0 {
+		st.InfeasibleTiers = append(st.InfeasibleTiers, tierdv1.InfeasibleTier{Name: tier})
+		i = len(st.InfeasibleTiers) - 1
+	}
+	e := &st.InfeasibleTiers[i]
+
+	// Count each attempt once. Skip if already recorded since the last change.
+	if e.Attempts > 0 && (st.LastModified == nil || e.Since.After(st.LastModified.Time)) {
+		return
+	}
+	e.Attempts++
+	e.Since = metav1.NewTime(now)
+	wait := min(infeasibleBackoff*time.Duration(e.Attempts), infeasibleBackoffMax)
+	e.RetryAfter = metav1.NewTime(now.Add(wait))
+	e.Message = message[:min(len(message), maxMessageLen)]
+	e.VACUID = vacUID
+	e.Capacity = capacity
+}
+
+// pruneInfeasible drops entries that may now succeed: the class was deleted
+// or recreated, or the PVC has grown.
+func (r *VolumeTierStateReconciler) pruneInfeasible(ctx context.Context,
+	st *tierdv1.VolumeTierStateStatus, pvc *corev1.PersistentVolumeClaim) error {
+	size := pvc.Status.Capacity.Storage()
+	var keep []tierdv1.InfeasibleTier
+	for _, e := range st.InfeasibleTiers {
+		vac := &storagev1.VolumeAttributesClass{}
+		err := r.Get(ctx, client.ObjectKey{Name: e.Name}, vac)
+		if client.IgnoreNotFound(err) != nil {
+			return err
+		}
+		switch {
+		case err != nil: // class deleted
+		case e.VACUID != "" && e.VACUID != vac.UID: // class recreated
+		case e.Capacity != nil && size.Cmp(*e.Capacity) > 0: // PVC grew
+		default:
+			keep = append(keep, e)
+		}
+	}
+	st.InfeasibleTiers = keep
+	return nil
+}
+
+// backoffUntil is when tier's infeasible backoff ends; ok is false if the
+// tier never failed.
+func backoffUntil(st tierdv1.VolumeTierStateStatus, tier string) (until time.Time, ok bool) {
+	i := slices.IndexFunc(st.InfeasibleTiers, func(t tierdv1.InfeasibleTier) bool { return t.Name == tier })
+	if i < 0 {
+		return time.Time{}, false
+	}
+	return st.InfeasibleTiers[i].RetryAfter.Time, true
+}
+
+// maxMessageLen matches the CRD's MaxLength on infeasibleTiers[].message.
+const maxMessageLen = 1024
+
+// hasModifyError returns the driver's error if the last modify attempt failed.
+func hasModifyError(pvc *corev1.PersistentVolumeClaim) (string, bool) {
+	for _, c := range pvc.Status.Conditions {
+		if c.Type ==
+			corev1.PersistentVolumeClaimVolumeModifyVolumeError && c.Status ==
+			corev1.ConditionTrue {
+			return c.Message, true
+		}
+	}
+	return "", false
+}
+
+func setCondition(vts *tierdv1.VolumeTierState, typ string, status metav1.ConditionStatus, reason, message string) {
+	meta.SetStatusCondition(
+		&vts.Status.Conditions,
+		metav1.Condition{
+			Type:               typ,
+			Status:             status,
+			Reason:             reason,
+			Message:            message,
+			ObservedGeneration: vts.Generation,
+		},
+	)
 }
 
 // shouldAct reports whether the controller should move the PVC to the
@@ -176,6 +340,10 @@ func shouldAct(vtp *tierdv1.VolumeTierPolicy, vts *tierdv1.VolumeTierState, pvc 
 		return false
 	case ptr.Deref(pvc.Spec.VolumeAttributesClassName, "") != st.CurrentTier:
 		return false // change is already in flight
+	}
+	// Wait out the backoff on a tier the driver rejected.
+	if until, ok := backoffUntil(st, st.RecommendedTier); ok && time.Now().Before(until) {
+		return false
 	}
 	// TODO: do we need a cooldown to check storage provider's QoS implementations?
 	return true

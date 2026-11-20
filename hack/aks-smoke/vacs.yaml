@@ -16,3 +16,12 @@ driverName: disk.csi.azure.com
 parameters:
   DiskIOPSReadWrite: "5000"
   DiskMBpsReadWrite: "200"
+---
+apiVersion: storage.k8s.io/v1
+kind: VolumeAttributesClass
+metadata:
+  name: tierd-test-not-possible
+driverName: disk.csi.azure.com
+parameters:
+  DiskIOPSReadWrite: "999999999999"
+  DiskMBpsReadWrite: "23439483948900"

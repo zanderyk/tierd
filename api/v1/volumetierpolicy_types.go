@@ -129,8 +129,6 @@ func (t *Tier) String() string {
 	return fmt.Sprintf("name=%s,iops=%s,tpmibps=%s", t.VACName, iops, tp)
 }
 
-// +kubebuilder:printcolumn:name="Mode",type=string,JSONPath=".spec.mode"
-//
 // +kubebuilder:validation:XValidation:rule="!has(self.scaleDown) || !has(self.scaleUp.utilizationAbove) || self.scaleDown.utilizationBelow < self.scaleUp.utilizationAbove",message="scaleDown.utilizationBelow must be lower than scaleUp.utilizationAbove"
 //
 // VolumeTierPolicySpec defines the desired state of VolumeTierPolicy
@@ -183,6 +181,12 @@ type VolumeTierPolicyStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:resource:shortName=vtp
+// +kubebuilder:printcolumn:name="Mode",type=string,JSONPath=".spec.mode"
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=".status.conditions[?(@.type=='Ready')].status"
+// +kubebuilder:printcolumn:name="Conflict",type=string,JSONPath=".status.conditions[?(@.type=='Conflict')].status"
+// +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=".status.conditions[?(@.type=='Ready')].reason",priority=1
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 
 // VolumeTierPolicy is the Schema for the volumetierpolicies API
 type VolumeTierPolicy struct {

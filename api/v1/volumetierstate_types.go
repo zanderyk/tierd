@@ -59,13 +59,11 @@ type InfeasibleTier struct {
 	// +optional
 	VACUID types.UID `json:"vacUID,omitempty"`
 	// capacity is the PVC's size when it was rejected. Some drivers cap
-	// performance by size (e.g. - Azure Premium SSD),
-	// so the entry is dropped if the PVC grows.
+	// performance by size.
 	// +optional
 	Capacity *resource.Quantity `json:"capacity,omitempty"`
 	// message is the driver's error, taken from the PVC's events, when available.
 	// +optional
-	// +kubebuilder:validation:MaxLength=1024
 	Message string `json:"message,omitempty"`
 }
 
@@ -109,6 +107,16 @@ type VolumeTierStateStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:selectablefield:JSONPath=".status.policyRef"
+// +kubebuilder:resource:shortName=vts
+// +kubebuilder:printcolumn:name="Policy",type=string,JSONPath=".status.policyRef"
+// +kubebuilder:printcolumn:name="Current",type=string,JSONPath=".status.currentTier"
+// +kubebuilder:printcolumn:name="Recommended",type=string,JSONPath=".status.recommendedTier"
+// +kubebuilder:printcolumn:name="Pending",type=string,JSONPath=".status.pendingDirection"
+// +kubebuilder:printcolumn:name="Managed",type=string,JSONPath=".status.conditions[?(@.type=='Managed')].status"
+// +kubebuilder:printcolumn:name="Modifying",type=string,JSONPath=".status.conditions[?(@.type=='Modifying')].status",priority=1
+// +kubebuilder:printcolumn:name="Last-Tier",type=string,JSONPath=".status.lastAppliedTier",priority=1
+// +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=".status.reason",priority=1
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 
 // VolumeTierState is the Schema for the volumetierstates API
 type VolumeTierState struct {

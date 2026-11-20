@@ -22,8 +22,11 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
+	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	tierdv1 "github.com/zanderyk/tierd/api/v1"
 )
@@ -163,6 +166,135 @@ func TestShouldAct(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := shouldAct(tt.policy, tt.state, tt.pvc); got != tt.want {
 				t.Errorf("shouldAct = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestShouldActWaitsOutInfeasibleBackoff(t *testing.T) {
+	act := &tierdv1.VolumeTierPolicy{Spec: tierdv1.VolumeTierPolicySpec{Mode: tierdv1.VolumeTierPolicyModeAct}}
+	pvc := &corev1.PersistentVolumeClaim{Spec: corev1.PersistentVolumeClaimSpec{
+		VolumeAttributesClassName: new(tierBase),
+	}}
+	state := func(retryAfter time.Time) *tierdv1.VolumeTierState {
+		return &tierdv1.VolumeTierState{Status: tierdv1.VolumeTierStateStatus{
+			CurrentTier:     tierBase,
+			RecommendedTier: tierFast,
+			InfeasibleTiers: []tierdv1.InfeasibleTier{{Name: tierFast, RetryAfter: metav1.NewTime(retryAfter)}},
+		}}
+	}
+
+	if shouldAct(act, state(time.Now().Add(time.Hour)), pvc) {
+		t.Error("shouldAct = true during backoff, want false")
+	}
+	if !shouldAct(act, state(time.Now().Add(-time.Minute)), pvc) {
+		t.Error("shouldAct = false after backoff, want true")
+	}
+}
+
+func TestMarkInfeasible(t *testing.T) {
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	st := &tierdv1.VolumeTierStateStatus{LastModified: new(metav1.NewTime(t0))}
+	check := func(step string, attempts int32, retryAfter time.Time) {
+		t.Helper()
+		if len(st.InfeasibleTiers) != 1 {
+			t.Fatalf("%s: %d entries, want 1", step, len(st.InfeasibleTiers))
+		}
+		e := st.InfeasibleTiers[0]
+		if e.Attempts != attempts || !e.RetryAfter.Time.Equal(retryAfter) {
+			t.Errorf("%s: attempts=%d retryAfter=%s, want %d %s", step, e.Attempts, e.RetryAfter.Time, attempts, retryAfter)
+		}
+	}
+
+	t1 := t0.Add(time.Minute)
+	markInfeasible(st, tierFast, "rejected", "", nil, t1)
+	check("first failure", 1, t1.Add(30*time.Minute))
+
+	markInfeasible(st, tierFast, "rejected", "", nil, t1.Add(time.Minute))
+	check("same failure seen again", 1, t1.Add(30*time.Minute))
+
+	t2 := t1.Add(time.Hour)
+	st.LastModified = new(metav1.NewTime(t2)) // tierd retried
+	t3 := t2.Add(time.Minute)
+	markInfeasible(st, tierFast, "rejected", "", nil, t3)
+	check("second attempt", 2, t3.Add(time.Hour))
+
+	st.InfeasibleTiers[0].Attempts = 20
+	t4 := t3.Add(time.Hour)
+	st.LastModified = new(metav1.NewTime(t4))
+	markInfeasible(st, tierFast, "rejected", "", nil, t4.Add(time.Minute))
+	check("capped", 21, t4.Add(time.Minute+6*time.Hour))
+}
+
+func TestMarkInfeasibleWithoutLastModified(t *testing.T) {
+	// The tier was changed by hand, so tierd never set LastModified.
+	st := &tierdv1.VolumeTierStateStatus{}
+	now := time.Now()
+	markInfeasible(st, tierFast, "rejected", "", nil, now)
+	markInfeasible(st, tierFast, "rejected", "", nil, now.Add(time.Minute))
+	if got := st.InfeasibleTiers[0].Attempts; got != 1 {
+		t.Errorf("attempts = %d, want 1", got)
+	}
+}
+
+func TestRecommendSkipsTierInBackoff(t *testing.T) {
+	spec := tierdv1.VolumeTierPolicySpec{
+		Tiers:   []tierdv1.Tier{{VACName: tierBase}, {VACName: tierFast}},
+		ScaleUp: tierdv1.ScaleUp{For: metav1.Duration{Duration: time.Minute}},
+	}
+	now := time.Date(2026, 11, 19, 10, 0, 0, 0, time.UTC)
+	until := now.Add(time.Hour)
+	st := &tierdv1.VolumeTierStateStatus{
+		CurrentTier:     tierBase,
+		InfeasibleTiers: []tierdv1.InfeasibleTier{{Name: tierFast, RetryAfter: metav1.NewTime(until)}},
+	}
+
+	recommend(st, spec, tierdv1.ScaleDirectionUp, "busy", now)
+	after := recommend(st, spec, tierdv1.ScaleDirectionUp, "busy", now.Add(2*time.Minute))
+	if st.RecommendedTier != tierBase {
+		t.Errorf("during backoff: RecommendedTier = %q, want base", st.RecommendedTier)
+	}
+	if want := until.Sub(now.Add(2 * time.Minute)); after != want {
+		t.Errorf("during backoff: requeue %v, want %v", after, want)
+	}
+
+	recommend(st, spec, tierdv1.ScaleDirectionUp, "busy", until)
+	if st.RecommendedTier != tierFast {
+		t.Errorf("after backoff: RecommendedTier = %q, want fast", st.RecommendedTier)
+	}
+}
+
+func TestPruneInfeasible(t *testing.T) {
+	vac := &storagev1.VolumeAttributesClass{Name: tierFast, UID: "uid-1"}
+	r := &VolumeTierStateReconciler{Client: fake.NewClientBuilder().WithObjects(vac).Build()}
+	pvc := func(size string) *corev1.PersistentVolumeClaim {
+		return &corev1.PersistentVolumeClaim{Status: corev1.PersistentVolumeClaimStatus{
+			Capacity: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse(size)},
+		}}
+	}
+	entry := func(name string, uid string, size string) tierdv1.InfeasibleTier {
+		return tierdv1.InfeasibleTier{Name: name, VACUID: types.UID(uid), Capacity: new(resource.MustParse(size))}
+	}
+
+	tests := []struct {
+		name  string
+		entry tierdv1.InfeasibleTier
+		pvc   *corev1.PersistentVolumeClaim
+		keep  bool
+	}{
+		{"nothing changed", entry(tierFast, "uid-1", "10Gi"), pvc("10Gi"), true},
+		{"class deleted", entry("gone", "uid-1", "10Gi"), pvc("10Gi"), false},
+		{"class recreated", entry(tierFast, "uid-0", "10Gi"), pvc("10Gi"), false},
+		{"PVC grew", entry(tierFast, "uid-1", "10Gi"), pvc("20Gi"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st := &tierdv1.VolumeTierStateStatus{InfeasibleTiers: []tierdv1.InfeasibleTier{tt.entry}}
+			if err := r.pruneInfeasible(t.Context(), st, tt.pvc); err != nil {
+				t.Fatal(err)
+			}
+			if kept := len(st.InfeasibleTiers) == 1; kept != tt.keep {
+				t.Errorf("kept = %v, want %v", kept, tt.keep)
 			}
 		})
 	}
