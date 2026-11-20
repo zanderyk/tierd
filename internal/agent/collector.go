@@ -79,7 +79,7 @@ type claim struct {
 // Collector samples the node's CSI volumes and publishes a VolumeIOSample
 // per PVC. It implements manager.Runnable.
 type Collector struct {
-	// Client writes VolumeIOSamples.
+	// Client is the controller runtime k8s client.
 	Client client.Client
 	// Reader reads PVs, VolumeTierStates and VolumeIOSamples straight from
 	// the API server, so the agent does not cache those cluster-wide on
@@ -171,6 +171,12 @@ func (c *Collector) sample(now time.Time) error {
 		c.prev[v.device] = reading{stat: cur, at: now}
 	}
 
+	for pv := range c.claims {
+		if _, ok := c.volumes[pv]; !ok {
+			DeleteVolumeMetrics(pv)
+		}
+	}
+
 	// Forget devices whose volume was unmounted.
 	maps.DeleteFunc(c.prev, func(dev string, _ reading) bool { return !live[dev] })
 	maps.DeleteFunc(c.windows, func(dev string, _ *Window) bool { return !live[dev] })
@@ -206,7 +212,7 @@ func (c *Collector) publish(ctx context.Context) {
 		if w == nil {
 			continue
 		}
-		summary, ok := w.Summarize()
+		volMetrics, ok := w.Summarize()
 		if !ok {
 			continue
 		}
@@ -231,9 +237,11 @@ func (c *Collector) publish(ctx context.Context) {
 		delete(c.removed, v.pvName)
 
 		psi := c.maxPressure(v.podUIDs)
-		if err := c.writeSample(ctx, *cl, v, summary, psi); err != nil {
+		if err := c.writeSample(ctx, *cl, v, volMetrics, psi); err != nil {
 			log.Error(err, "Failed to write VolumeIOSample", "namespace", cl.namespace, "pvc", cl.name)
 		}
+
+		SetVolumeMetrics(*cl, v.pvName, c.Config.NodeName, volMetrics, psi)
 	}
 }
 
@@ -265,6 +273,7 @@ func (c *Collector) removeSample(ctx context.Context, cl claim, pvName string) {
 		logf.FromContext(ctx).Info("Deleted VolumeIOSample of unmanaged PVC", "namespace", cl.namespace, "name", cl.name)
 	}
 	c.removed[pvName] = true
+	DeleteVolumeMetrics(pvName)
 }
 
 // claimFor returns the PVC bound to pv, or nil if it is not bound.
@@ -339,7 +348,7 @@ func podCgroupPath(root, podUID string) (string, error) {
 
 // writeSample creates the PVC's VolumeIOSample if needed and updates its
 // status.
-func (c *Collector) writeSample(ctx context.Context, cl claim, v volume, s Summary, psi *float64) error {
+func (c *Collector) writeSample(ctx context.Context, cl claim, v volume, s VolumeMetrics, psi *float64) error {
 	sample := &tierdv1.VolumeIOSample{}
 	err := c.Reader.Get(ctx, client.ObjectKey{Namespace: cl.namespace, Name: cl.name}, sample)
 	if apierrors.IsNotFound(err) {

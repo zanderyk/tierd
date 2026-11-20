@@ -49,8 +49,8 @@ func (w *Window) Add(iv procfs.Interval) {
 	}
 }
 
-// Summary is a window's intervals reduced to the figures in a VolumeIOSample.
-type Summary struct {
+// VolumeMetrics is a window's intervals reduced to the figures in a VolumeIOSample.
+type VolumeMetrics struct {
 	Span           time.Duration
 	Samples        int
 	IOPS           float64
@@ -65,11 +65,11 @@ type Summary struct {
 
 // Summarize reduces the window. Rates are time-weighted means; ok is false
 // if the window is empty.
-func (w *Window) Summarize() (Summary, bool) {
+func (w *Window) Summarize() (VolumeMetrics, bool) {
 	if len(w.intervals) == 0 {
-		return Summary{}, false
+		return VolumeMetrics{}, false
 	}
-	s := Summary{Samples: len(w.intervals)}
+	s := VolumeMetrics{Samples: len(w.intervals)}
 	var lat []time.Duration
 	for _, iv := range w.intervals {
 		secs := iv.Elapsed.Seconds()

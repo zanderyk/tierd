@@ -28,6 +28,11 @@ spec:
         command: ["/agent"]
         args:
         - --health-probe-bind-address=:8081
+        - --metrics-bind-address=:8080
+        ports:
+        - name: metrics
+          containerPort: 8080
+          protocol: TCP
         env:
         - name: NODE_NAME
           valueFrom:
