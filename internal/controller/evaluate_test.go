@@ -27,7 +27,10 @@ import (
 
 	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/events"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -377,5 +380,47 @@ func TestSyncOverride(t *testing.T) {
 				t.Errorf("LastAppliedTier = %q, want %q", vts.Status.LastAppliedTier, tt.wantLast)
 			}
 		})
+	}
+}
+
+func TestReconcileWithoutSample(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := tierdv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	key := types.NamespacedName{Namespace: "ns", Name: "data"}
+	pvc := &corev1.PersistentVolumeClaim{
+		Namespace: key.Namespace, Name: key.Name,
+		Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
+	}
+	vtp := &tierdv1.VolumeTierPolicy{Namespace: key.Namespace, Name: "policy"}
+	// A stale condition from before the policy controller set policyRef.
+	vts := &tierdv1.VolumeTierState{
+		Namespace: key.Namespace, Name: key.Name,
+		Status: tierdv1.VolumeTierStateStatus{
+			PolicyRef: "policy",
+			Conditions: []metav1.Condition{{
+				Type: ConditionVTSManaged, Status: metav1.ConditionFalse,
+				Reason: ConditionReasonMissingPolicy, Message: "policy ref is empty",
+			}},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(pvc, vtp, vts).WithStatusSubresource(vts).Build()
+	r := &VolumeTierStateReconciler{Client: c, Recorder: events.NewFakeRecorder(10)}
+
+	if _, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatal(err)
+	}
+	got := &tierdv1.VolumeTierState{}
+	if err := c.Get(t.Context(), key, got); err != nil {
+		t.Fatal(err)
+	}
+	cond := meta.FindStatusCondition(got.Status.Conditions, ConditionVTSManaged)
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != ConditionReasonAwaitingSample {
+		t.Errorf("Managed = %+v, want False/%s", cond, ConditionReasonAwaitingSample)
 	}
 }

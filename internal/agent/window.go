@@ -61,9 +61,12 @@ type VolumeMetrics struct {
 	LatencyP95  time.Duration
 	Utilization float64
 	QueueDepth  float64
-	// HasTiming is false when the source has no timing counters (cifs):
-	// LatencyP50, LatencyP95, Utilization and QueueDepth are unset.
-	HasTiming bool
+	// HasLatency is false when the source has no timing counters (cifs):
+	// LatencyP50, LatencyP95 and QueueDepth are unset.
+	HasLatency bool
+	// HasUtilization is false when the source has no busy time (cifs, nfs):
+	// Utilization is unset.
+	HasUtilization bool
 }
 
 // Summarize reduces the window. Rates are time-weighted means; ok is false
@@ -73,16 +76,17 @@ func (w *Window) Summarize() (VolumeMetrics, bool) {
 		return VolumeMetrics{}, false
 	}
 	// A volume's intervals all come from one source.
-	s := VolumeMetrics{Samples: len(w.intervals), HasTiming: w.intervals[0].HasTiming}
+	s := VolumeMetrics{
+		Samples:        len(w.intervals),
+		HasLatency:     w.intervals[0].HasLatency,
+		HasUtilization: w.intervals[0].HasUtilization,
+	}
 	var lat []time.Duration
 	for _, iv := range w.intervals {
 		secs := iv.Elapsed.Seconds()
 		s.Span += iv.Elapsed
 		s.IOPS += iv.IOPS * secs
 		s.BytesPerSecond += iv.BytesPerSecond * secs
-		if !s.HasTiming {
-			continue
-		}
 		s.Utilization += iv.Utilization * secs
 		s.QueueDepth += iv.QueueDepth * secs
 		if iv.IOPS > 0 {
@@ -92,15 +96,13 @@ func (w *Window) Summarize() (VolumeMetrics, bool) {
 	total := s.Span.Seconds()
 	s.IOPS /= total
 	s.BytesPerSecond /= total
-	if !s.HasTiming {
-		return s, true
-	}
-
 	s.Utilization /= total
 	s.QueueDepth /= total
-	slices.Sort(lat)
-	s.LatencyP50 = percentile(lat, 50)
-	s.LatencyP95 = percentile(lat, 95)
+	if s.HasLatency {
+		slices.Sort(lat)
+		s.LatencyP50 = percentile(lat, 50)
+		s.LatencyP95 = percentile(lat, 95)
+	}
 	return s, true
 }
 

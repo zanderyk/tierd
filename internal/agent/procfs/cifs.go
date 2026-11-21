@@ -26,7 +26,7 @@ import (
 
 // ParseCifsStats parses /proc/fs/cifs/Stats into counters keyed by share,
 // written the way mountinfo shows it ("//host/share"). cifs has no timing
-// counters, so HasTiming is false.
+// counters, so HasLatency and HasUtilization are false.
 //
 //  1. \\host\share
 //     Bytes read: 0  Bytes written: 4875878400

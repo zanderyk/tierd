@@ -48,22 +48,27 @@ type DiskStat struct {
 type Counters struct {
 	Reads, Writes           uint64
 	BytesRead, BytesWritten uint64
-	ReadMs, WriteMs         uint64 // block only
-	IOTicksMs, WeightedMs   uint64 // block only
-	HasTiming               bool   // false for cifs
+	// ReadMs, WriteMs and WeightedMs are time spent on I/O. Set when
+	// HasLatency (block, nfs).
+	ReadMs, WriteMs, WeightedMs uint64
+	// IOTicksMs is time with I/O in flight. Set when HasUtilization (block).
+	IOTicksMs      uint64
+	HasLatency     bool
+	HasUtilization bool
 }
 
 func (d *DiskStat) Counters() Counters {
 	return Counters{
-		Reads:        d.ReadsCompleted,
-		Writes:       d.WritesComplete,
-		BytesRead:    d.SectorsRead * sectorSize,
-		BytesWritten: d.SectorsWritten * sectorSize,
-		ReadMs:       d.ReadTimeMs,
-		WriteMs:      d.WriteTimeMs,
-		IOTicksMs:    d.IOTimeMs,
-		WeightedMs:   d.WeightedTimeMs,
-		HasTiming:    true,
+		Reads:          d.ReadsCompleted,
+		Writes:         d.WritesComplete,
+		BytesRead:      d.SectorsRead * sectorSize,
+		BytesWritten:   d.SectorsWritten * sectorSize,
+		ReadMs:         d.ReadTimeMs,
+		WriteMs:        d.WriteTimeMs,
+		IOTicksMs:      d.IOTimeMs,
+		WeightedMs:     d.WeightedTimeMs,
+		HasLatency:     true,
+		HasUtilization: true,
 	}
 }
 
@@ -119,9 +124,12 @@ type Interval struct {
 	Utilization float64
 	// QueueDepth is the average number of requests in flight.
 	QueueDepth float64
-	// HasTiming is false when the source has no timing counters (cifs):
-	// AvgLatency, Utilization and QueueDepth are then unset.
-	HasTiming bool
+	// HasLatency is false when the source has no timing counters (cifs):
+	// AvgLatency and QueueDepth are then unset.
+	HasLatency bool
+	// HasUtilization is false when the source has no busy time (cifs, nfs):
+	// Utilization is then unset.
+	HasUtilization bool
 }
 
 // Delta computes the activity between prev and cur taken elapsed apart.
@@ -156,18 +164,20 @@ func Delta(prev, cur Counters, elapsed time.Duration) (Interval, bool) {
 		Elapsed:        elapsed,
 		IOPS:           ios / secs,
 		BytesPerSecond: bytes / secs,
-		HasTiming:      cur.HasTiming,
-	}
-	if !cur.HasTiming {
-		return iv, true
+		HasLatency:     cur.HasLatency,
+		HasUtilization: cur.HasUtilization,
 	}
 
 	elapsedMs := float64(elapsed.Milliseconds())
-	ioMs := float64((cur.ReadMs - prev.ReadMs) + (cur.WriteMs - prev.WriteMs))
-	iv.Utilization = min(float64(cur.IOTicksMs-prev.IOTicksMs)/elapsedMs, 1)
-	iv.QueueDepth = float64(cur.WeightedMs-prev.WeightedMs) / elapsedMs
-	if ios > 0 {
-		iv.AvgLatency = time.Duration(ioMs / ios * float64(time.Millisecond))
+	if cur.HasLatency {
+		ioMs := float64((cur.ReadMs - prev.ReadMs) + (cur.WriteMs - prev.WriteMs))
+		iv.QueueDepth = float64(cur.WeightedMs-prev.WeightedMs) / elapsedMs
+		if ios > 0 {
+			iv.AvgLatency = time.Duration(ioMs / ios * float64(time.Millisecond))
+		}
+	}
+	if cur.HasUtilization {
+		iv.Utilization = min(float64(cur.IOTicksMs-prev.IOTicksMs)/elapsedMs, 1)
 	}
 	return iv, true
 }

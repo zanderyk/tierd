@@ -76,8 +76,8 @@ func TestDeltaWithoutTiming(t *testing.T) {
 	if !ok {
 		t.Fatal("Delta not ok")
 	}
-	if iv.HasTiming {
-		t.Error("HasTiming = true, want false")
+	if iv.HasLatency || iv.HasUtilization {
+		t.Errorf("want no timing flags: %+v", iv)
 	}
 	if iv.IOPS != 100 || iv.BytesPerSecond != 100_000_000 {
 		t.Errorf("rates = %+v", iv)

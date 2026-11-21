@@ -37,14 +37,17 @@ func SetVolumeMetrics(cl claim, pvName, node string, m VolumeMetrics, psi *float
 	}
 	volumeIOPS.With(l).Set(m.IOPS)
 	volumeThroughput.With(l).Set(m.BytesPerSecond)
-	if m.HasTiming {
+	if m.HasLatency {
 		volumeLatencyP95.With(l).Set(m.LatencyP95.Seconds())
-		volumeUtilization.With(l).Set(m.Utilization)
 		volumeQueueDepth.With(l).Set(m.QueueDepth)
 	} else {
 		volumeLatencyP95.Delete(l)
-		volumeUtilization.Delete(l)
 		volumeQueueDepth.Delete(l)
+	}
+	if m.HasUtilization {
+		volumeUtilization.With(l).Set(m.Utilization)
+	} else {
+		volumeUtilization.Delete(l)
 	}
 
 	if psi != nil {

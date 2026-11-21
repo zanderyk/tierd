@@ -57,6 +57,7 @@ const (
 	ConditionReasonPolicyMatched  = "PolicyMatched"
 	ConditionReasonInvalidPVC     = "InvalidPVC"
 	ConditionReasonMissingPolicy  = "MissingPolicy"
+	ConditionReasonAwaitingSample = "AwaitingSample"
 	ConditionReasonManualOverride = "VolumeAttributesClassManualOverride"
 )
 
@@ -145,8 +146,12 @@ func (r *VolumeTierStateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	if err := r.Get(ctx, req.NamespacedName, vioSample); err != nil {
 		if !apierrors.IsNotFound(err) {
 			logger.Error(err, "Failed to get VolumeIOSample", "name", req.Name)
+			return ctrl.Result{}, err
 		}
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+		// The sample watch requeues once the node agent publishes one.
+		setManaged(vts, metav1.ConditionFalse, ConditionReasonAwaitingSample,
+			fmt.Sprintf("Waiting for the node agent's VolumeIOSample (policy %s)", policyName))
+		return ctrl.Result{}, r.patchStatus(ctx, vts, base)
 	}
 
 	if err := r.pruneInfeasible(ctx, &vts.Status, pvc); err != nil {

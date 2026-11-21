@@ -37,7 +37,7 @@ func seriesCount(t *testing.T) int {
 
 func TestVolumeMetrics(t *testing.T) {
 	cl := claim{namespace: "default", name: "data"}
-	m := VolumeMetrics{IOPS: 3000, LatencyP95: 20 * time.Millisecond, Utilization: 0.5, HasTiming: true}
+	m := VolumeMetrics{IOPS: 3000, LatencyP95: 20 * time.Millisecond, Utilization: 0.5, HasLatency: true, HasUtilization: true}
 	psi := 25.0
 
 	SetVolumeMetrics(cl, "pvc-a", "node-1", m, &psi)

@@ -136,7 +136,8 @@ type kind string
 const (
 	kindBlock kind = "block" // /proc/diskstats
 	kindCifs  kind = "cifs"  // /proc/fs/cifs/Stats
-	kindNone  kind = ""      // nothing can measure it (e.g. NFS, for now)
+	kindNFS   kind = "nfs"   // /proc/1/mountstats
+	kindNone  kind = ""      // nothing can measure it
 )
 
 func mountKind(m procfs.Mount) kind {
@@ -145,6 +146,8 @@ func mountKind(m procfs.Mount) kind {
 		return kindBlock
 	case m.FSType == "cifs":
 		return kindCifs
+	case m.FSType == "nfs", m.FSType == "nfs4":
+		return kindNFS
 	}
 	return kindNone
 }
@@ -172,7 +175,8 @@ func (c *Collector) sample(now time.Time) error {
 		return err
 	}
 
-	var cifs map[string]procfs.Counters // read on the first cifs volume
+	// Read on the first volume that needs them.
+	var cifs, nfs map[string]procfs.Counters
 	live := make(map[string]bool, len(c.volumes))
 	for _, v := range c.volumes {
 		live[v.mount.Device] = true
@@ -191,6 +195,13 @@ func (c *Collector) sample(now time.Time) error {
 				}
 			}
 			cur, ok = cifs[v.mount.Source]
+		case kindNFS:
+			if nfs == nil {
+				if nfs, err = c.readMountStats(); err != nil {
+					return err
+				}
+			}
+			cur, ok = nfs[v.mount.MountPoint]
 		default:
 			continue // no source can measure it
 		}
@@ -237,6 +248,16 @@ func (c *Collector) readCifsStats() (map[string]procfs.Counters, error) {
 	}
 	defer func() { _ = f.Close() }()
 	return procfs.ParseCifsStats(f)
+}
+
+// readMountStats reads the host's /proc/1/mountstats for NFS counters.
+func (c *Collector) readMountStats() (map[string]procfs.Counters, error) {
+	f, err := os.Open(filepath.Join(c.Config.ProcRoot, "1", "mountstats"))
+	if err != nil {
+		return nil, fmt.Errorf("cannot open host mountstats: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	return procfs.ParseMountStats(f)
 }
 
 // discoverVolumes finds kubelet CSI filesystem mounts and groups them by PV.
@@ -447,11 +468,13 @@ func (c *Collector) writeSample(ctx context.Context, cl claim, v volume, s Volum
 		ThroughputBytesPerSecond: int64(math.Round(s.BytesPerSecond)),
 		Conditions:               base.Status.Conditions,
 	}
-	if s.HasTiming {
+	if s.HasLatency {
 		sample.Status.LatencyP50Micros = new(s.LatencyP50.Microseconds())
 		sample.Status.LatencyP95Micros = new(s.LatencyP95.Microseconds())
-		sample.Status.UtilizationPercent = new(int32(math.Round(s.Utilization * 100)))
 		sample.Status.QueueDepth = milliQuantity(s.QueueDepth)
+	}
+	if s.HasUtilization {
+		sample.Status.UtilizationPercent = new(int32(math.Round(s.Utilization * 100)))
 	}
 	if psi != nil {
 		sample.Status.IOPressureSomeAvg60 = milliQuantity(*psi)

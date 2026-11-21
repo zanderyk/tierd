@@ -39,7 +39,8 @@ func TestWindowSummarize(t *testing.T) {
 			AvgLatency:     time.Duration(i) * time.Millisecond,
 			Utilization:    0.5,
 			QueueDepth:     1,
-			HasTiming:      true,
+			HasLatency:     true,
+			HasUtilization: true,
 		})
 	}
 
@@ -63,8 +64,8 @@ func TestWindowSummarize(t *testing.T) {
 
 func TestWindowIgnoresIdleIntervalsForLatency(t *testing.T) {
 	w := NewWindow(time.Minute)
-	w.Add(procfs.Interval{Elapsed: 30 * time.Second, HasTiming: true})
-	w.Add(procfs.Interval{Elapsed: 30 * time.Second, IOPS: 10, AvgLatency: 5 * time.Millisecond, HasTiming: true})
+	w.Add(procfs.Interval{Elapsed: 30 * time.Second, HasLatency: true, HasUtilization: true})
+	w.Add(procfs.Interval{Elapsed: 30 * time.Second, IOPS: 10, AvgLatency: 5 * time.Millisecond, HasLatency: true, HasUtilization: true})
 
 	s, _ := w.Summarize()
 	if s.LatencyP50 != 5*time.Millisecond || s.LatencyP95 != 5*time.Millisecond {
@@ -85,8 +86,8 @@ func TestWindowWithoutTiming(t *testing.T) {
 	if !ok {
 		t.Fatal("Summarize not ok")
 	}
-	if s.HasTiming {
-		t.Error("HasTiming = true, want false")
+	if s.HasLatency || s.HasUtilization {
+		t.Errorf("want no timing flags: %+v", s)
 	}
 	if s.IOPS != 20 || s.BytesPerSecond != 200 {
 		t.Errorf("rates = %+v, want IOPS 20, 200 B/s", s)

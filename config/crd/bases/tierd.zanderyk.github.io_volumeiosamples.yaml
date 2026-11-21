@@ -181,8 +181,8 @@ spec:
               utilizationPercent:
                 description: |-
                   utilizationPercent is the share of the window the device had I/O in
-                  flight (diskstats io_ticks). Unset when the volume's source has no
-                  timing counters (cifs).
+                  flight (diskstats io_ticks). Unset for sources with no busy-time
+                  counter (cifs, nfs).
                 format: int32
                 maximum: 100
                 minimum: 0

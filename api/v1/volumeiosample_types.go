@@ -65,8 +65,8 @@ type VolumeIOSampleStatus struct {
 	// +optional
 	LatencyP95Micros *int64 `json:"latencyP95Micros,omitempty"`
 	// utilizationPercent is the share of the window the device had I/O in
-	// flight (diskstats io_ticks). Unset when the volume's source has no
-	// timing counters (cifs).
+	// flight (diskstats io_ticks). Unset for sources with no busy-time
+	// counter (cifs, nfs).
 	// +optional
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=100
