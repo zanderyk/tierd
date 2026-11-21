@@ -226,6 +226,21 @@ func (in *VolumeIOSampleStatus) DeepCopyInto(out *VolumeIOSampleStatus) {
 		*out = (*in).DeepCopy()
 	}
 	out.Window = in.Window
+	if in.LatencyP50Micros != nil {
+		in, out := &in.LatencyP50Micros, &out.LatencyP50Micros
+		*out = new(int64)
+		**out = **in
+	}
+	if in.LatencyP95Micros != nil {
+		in, out := &in.LatencyP95Micros, &out.LatencyP95Micros
+		*out = new(int64)
+		**out = **in
+	}
+	if in.UtilizationPercent != nil {
+		in, out := &in.UtilizationPercent, &out.UtilizationPercent
+		*out = new(int32)
+		**out = **in
+	}
 	if in.QueueDepth != nil {
 		in, out := &in.QueueDepth, &out.QueueDepth
 		x := (*in).DeepCopy()

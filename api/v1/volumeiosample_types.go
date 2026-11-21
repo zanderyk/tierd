@@ -55,19 +55,22 @@ type VolumeIOSampleStatus struct {
 	// +optional
 	ThroughputBytesPerSecond int64 `json:"throughputBytesPerSecond"`
 	// latencyP50Micros is the median of the per-interval average I/O latency.
+	// Unset when the volume's source has no timing counters (cifs).
 	// +optional
-	LatencyP50Micros int64 `json:"latencyP50Micros"`
+	LatencyP50Micros *int64 `json:"latencyP50Micros,omitempty"`
 	// latencyP95Micros is the 95th percentile of the per-interval average I/O
 	// latency. It is not a per-request percentile: the kernel only exposes
-	// totals, so each interval contributes one average.
+	// totals, so each interval contributes one average. Unset when the
+	// volume's source has no timing counters (cifs).
 	// +optional
-	LatencyP95Micros int64 `json:"latencyP95Micros"`
+	LatencyP95Micros *int64 `json:"latencyP95Micros,omitempty"`
 	// utilizationPercent is the share of the window the device had I/O in
-	// flight (diskstats io_ticks).
+	// flight (diskstats io_ticks). Unset when the volume's source has no
+	// timing counters (cifs).
 	// +optional
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=100
-	UtilizationPercent int32 `json:"utilizationPercent"`
+	UtilizationPercent *int32 `json:"utilizationPercent,omitempty"`
 	// queueDepth is the average number of requests in flight.
 	// +optional
 	QueueDepth *resource.Quantity `json:"queueDepth,omitempty"`

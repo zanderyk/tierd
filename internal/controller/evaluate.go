@@ -48,8 +48,8 @@ func scaleUpHolds(up tierdv1.ScaleUp, current tierdv1.Tier, s tierdv1.VolumeIOSa
 			return fmt.Sprintf("I/O pressure %.0f%% > %d%%", p, *up.IOPressureAbove), true
 		}
 	}
-	if up.LatencyP95AboveMs != nil {
-		if ms := s.LatencyP95Micros / 1000; ms > *up.LatencyP95AboveMs {
+	if up.LatencyP95AboveMs != nil && s.LatencyP95Micros != nil {
+		if ms := *s.LatencyP95Micros / 1000; ms > *up.LatencyP95AboveMs {
 			return fmt.Sprintf("p95 latency %dms > %dms", ms, *up.LatencyP95AboveMs), true
 		}
 	}
@@ -63,11 +63,14 @@ func scaleUpHolds(up tierdv1.ScaleUp, current tierdv1.Tier, s tierdv1.VolumeIOSa
 
 // scaleDownHolds is true if every configured condition holds. Utilization is
 // measured against the lower tier's ceilings, or device busy time if it has
-// none. Unknown pressure blocks a scale-down.
+// none. Unknown pressure or utilization blocks a scale-down.
 func scaleDownHolds(down tierdv1.ScaleDown, lower tierdv1.Tier, s tierdv1.VolumeIOSampleStatus) (string, bool) {
 	pct, ok := ceilingPercent(lower.Ceilings, s)
 	if !ok {
-		pct = float64(s.UtilizationPercent)
+		if s.UtilizationPercent == nil {
+			return "", false
+		}
+		pct = float64(*s.UtilizationPercent)
 	}
 	if pct >= float64(down.UtilizationBelow) {
 		return "", false

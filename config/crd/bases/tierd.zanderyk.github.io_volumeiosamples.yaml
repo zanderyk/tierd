@@ -137,15 +137,17 @@ spec:
                 format: int64
                 type: integer
               latencyP50Micros:
-                description: latencyP50Micros is the median of the per-interval average
-                  I/O latency.
+                description: |-
+                  latencyP50Micros is the median of the per-interval average I/O latency.
+                  Unset when the volume's source has no timing counters (cifs).
                 format: int64
                 type: integer
               latencyP95Micros:
                 description: |-
                   latencyP95Micros is the 95th percentile of the per-interval average I/O
                   latency. It is not a per-request percentile: the kernel only exposes
-                  totals, so each interval contributes one average.
+                  totals, so each interval contributes one average. Unset when the
+                  volume's source has no timing counters (cifs).
                 format: int64
                 type: integer
               nodeName:
@@ -179,7 +181,8 @@ spec:
               utilizationPercent:
                 description: |-
                   utilizationPercent is the share of the window the device had I/O in
-                  flight (diskstats io_ticks).
+                  flight (diskstats io_ticks). Unset when the volume's source has no
+                  timing counters (cifs).
                 format: int32
                 maximum: 100
                 minimum: 0

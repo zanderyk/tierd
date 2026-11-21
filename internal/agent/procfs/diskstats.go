@@ -44,6 +44,29 @@ type DiskStat struct {
 	WeightedTimeMs uint64
 }
 
+// Counters is cumulative I/O counters for one volume from any source.
+type Counters struct {
+	Reads, Writes           uint64
+	BytesRead, BytesWritten uint64
+	ReadMs, WriteMs         uint64 // block only
+	IOTicksMs, WeightedMs   uint64 // block only
+	HasTiming               bool   // false for cifs
+}
+
+func (d *DiskStat) Counters() Counters {
+	return Counters{
+		Reads:        d.ReadsCompleted,
+		Writes:       d.WritesComplete,
+		BytesRead:    d.SectorsRead * sectorSize,
+		BytesWritten: d.SectorsWritten * sectorSize,
+		ReadMs:       d.ReadTimeMs,
+		WriteMs:      d.WriteTimeMs,
+		IOTicksMs:    d.IOTimeMs,
+		WeightedMs:   d.WeightedTimeMs,
+		HasTiming:    true,
+	}
+}
+
 // ParseDiskStats parses /proc/diskstats into counters keyed by "major:minor".
 func ParseDiskStats(r io.Reader) (map[string]DiskStat, error) {
 	stats := make(map[string]DiskStat)
@@ -83,7 +106,7 @@ func ParseDiskStats(r io.Reader) (map[string]DiskStat, error) {
 	return stats, nil
 }
 
-// Interval is the device activity between two DiskStat readings.
+// Interval is the device activity between two Counters readings.
 type Interval struct {
 	Elapsed time.Duration
 	// IOPS is completed reads plus writes per second.
@@ -96,25 +119,28 @@ type Interval struct {
 	Utilization float64
 	// QueueDepth is the average number of requests in flight.
 	QueueDepth float64
+	// HasTiming is false when the source has no timing counters (cifs):
+	// AvgLatency, Utilization and QueueDepth are then unset.
+	HasTiming bool
 }
 
 // Delta computes the activity between prev and cur taken elapsed apart.
 // ok is false if elapsed is not positive or a counter went backwards (the
 // device was replaced or the counters reset), in which case the interval
 // should be skipped.
-func Delta(prev, cur DiskStat, elapsed time.Duration) (Interval, bool) {
+func Delta(prev, cur Counters, elapsed time.Duration) (Interval, bool) {
 	if elapsed <= 0 {
 		return Interval{}, false
 	}
 	pairs := [][2]uint64{
-		{prev.ReadsCompleted, cur.ReadsCompleted},
-		{prev.WritesComplete, cur.WritesComplete},
-		{prev.SectorsRead, cur.SectorsRead},
-		{prev.SectorsWritten, cur.SectorsWritten},
-		{prev.ReadTimeMs, cur.ReadTimeMs},
-		{prev.WriteTimeMs, cur.WriteTimeMs},
-		{prev.IOTimeMs, cur.IOTimeMs},
-		{prev.WeightedTimeMs, cur.WeightedTimeMs},
+		{prev.Reads, cur.Reads},
+		{prev.Writes, cur.Writes},
+		{prev.BytesRead, cur.BytesRead},
+		{prev.BytesWritten, cur.BytesWritten},
+		{prev.ReadMs, cur.ReadMs},
+		{prev.WriteMs, cur.WriteMs},
+		{prev.IOTicksMs, cur.IOTicksMs},
+		{prev.WeightedMs, cur.WeightedMs},
 	}
 	for _, p := range pairs {
 		if p[1] < p[0] {
@@ -122,19 +148,24 @@ func Delta(prev, cur DiskStat, elapsed time.Duration) (Interval, bool) {
 		}
 	}
 
-	ios := float64((cur.ReadsCompleted - prev.ReadsCompleted) + (cur.WritesComplete - prev.WritesComplete))
-	sectors := float64((cur.SectorsRead - prev.SectorsRead) + (cur.SectorsWritten - prev.SectorsWritten))
-	ioMs := float64((cur.ReadTimeMs - prev.ReadTimeMs) + (cur.WriteTimeMs - prev.WriteTimeMs))
+	ios := float64((cur.Reads - prev.Reads) + (cur.Writes - prev.Writes))
+	bytes := float64((cur.BytesRead - prev.BytesRead) + (cur.BytesWritten - prev.BytesWritten))
 	secs := elapsed.Seconds()
-	elapsedMs := float64(elapsed.Milliseconds())
 
 	iv := Interval{
 		Elapsed:        elapsed,
 		IOPS:           ios / secs,
-		BytesPerSecond: sectors * sectorSize / secs,
-		Utilization:    min(float64(cur.IOTimeMs-prev.IOTimeMs)/elapsedMs, 1),
-		QueueDepth:     float64(cur.WeightedTimeMs-prev.WeightedTimeMs) / elapsedMs,
+		BytesPerSecond: bytes / secs,
+		HasTiming:      cur.HasTiming,
 	}
+	if !cur.HasTiming {
+		return iv, true
+	}
+
+	elapsedMs := float64(elapsed.Milliseconds())
+	ioMs := float64((cur.ReadMs - prev.ReadMs) + (cur.WriteMs - prev.WriteMs))
+	iv.Utilization = min(float64(cur.IOTicksMs-prev.IOTicksMs)/elapsedMs, 1)
+	iv.QueueDepth = float64(cur.WeightedMs-prev.WeightedMs) / elapsedMs
 	if ios > 0 {
 		iv.AvgLatency = time.Duration(ioMs / ios * float64(time.Millisecond))
 	}

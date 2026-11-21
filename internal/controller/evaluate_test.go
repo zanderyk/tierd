@@ -64,7 +64,7 @@ func TestWantDirection(t *testing.T) {
 		{"idle on base stays", 0, tierdv1.VolumeIOSampleStatus{IOPS: 10, IOPressureSomeAvg60: psi("0")}, tierdv1.ScaleDirectionNone},
 		{"iops near base ceiling", 0, tierdv1.VolumeIOSampleStatus{IOPS: 3060}, tierdv1.ScaleDirectionUp},
 		{"throughput near base ceiling", 0, tierdv1.VolumeIOSampleStatus{ThroughputBytesPerSecond: 110 << 20}, tierdv1.ScaleDirectionUp},
-		{"high latency", 0, tierdv1.VolumeIOSampleStatus{LatencyP95Micros: 25_000}, tierdv1.ScaleDirectionUp},
+		{"high latency", 0, tierdv1.VolumeIOSampleStatus{LatencyP95Micros: new(int64(25_000))}, tierdv1.ScaleDirectionUp},
 		{"high pressure", 0, tierdv1.VolumeIOSampleStatus{IOPressureSomeAvg60: psi("35")}, tierdv1.ScaleDirectionUp},
 		{"busy on top tier stays", 1, tierdv1.VolumeIOSampleStatus{IOPS: 4900}, tierdv1.ScaleDirectionNone},
 		{"quiet on fast goes down", 1, tierdv1.VolumeIOSampleStatus{IOPS: 300, IOPressureSomeAvg60: psi("0")}, tierdv1.ScaleDirectionDown},

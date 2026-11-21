@@ -17,10 +17,12 @@ limitations under the License.
 package agent
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/zanderyk/tierd/internal/agent/procfs"
 )
@@ -35,20 +37,26 @@ func TestDiscoverVolumes(t *testing.T) {
 		{Device: sdc, MountPoint: kubelet + "aaaa-1/volumes/kubernetes.io~csi/pvc-a/mount"},
 		{Device: sdc, MountPoint: kubelet + "bbbb-2/volumes/kubernetes.io~csi/pvc-a/mount"},
 		{Device: "8:48", MountPoint: kubelet + "aaaa-1/volumes/kubernetes.io~csi/pvc-b/mount"},
-		{Device: "0:88", MountPoint: kubelet + "cccc-3/volumes/kubernetes.io~csi/pvc-nfs/mount"},
+		{Device: "0:88", FSType: "nfs4", MountPoint: kubelet + "cccc-3/volumes/kubernetes.io~csi/pvc-nfs/mount"},
+		{Device: "0:97", FSType: "cifs", MountPoint: kubelet + "cccc-3/volumes/kubernetes.io~csi/pvc-smb/mount"},
 		{Device: "0:61", MountPoint: kubelet + "aaaa-1/volumes/kubernetes.io~projected/token"},
 	}
 
 	vols := discoverVolumes(mounts)
-	if len(vols) != 2 {
-		t.Fatalf("got %d volumes, want 2 (pvc-a, pvc-b): %+v", len(vols), vols)
+	if len(vols) != 4 {
+		t.Fatalf("got %d volumes, want 4 (pvc-a, pvc-b, pvc-nfs, pvc-smb): %+v", len(vols), vols)
 	}
 	a := vols["pvc-a"]
-	if a.device != sdc || !slices.Equal(a.podUIDs, []string{"aaaa-1", "bbbb-2"}) {
+	if a.mount.Device != sdc || !slices.Equal(a.podUIDs, []string{"aaaa-1", "bbbb-2"}) {
 		t.Errorf("pvc-a = %+v", a)
 	}
-	if vols["pvc-b"].device != "8:48" {
+	if vols["pvc-b"].mount.Device != "8:48" {
 		t.Errorf("pvc-b = %+v", vols["pvc-b"])
+	}
+	for pv, want := range map[string]kind{"pvc-a": kindBlock, "pvc-smb": kindCifs, "pvc-nfs": kindNone} {
+		if got := vols[pv].kind; got != want {
+			t.Errorf("%s kind = %q, want %q", pv, got, want)
+		}
 	}
 }
 
@@ -73,5 +81,54 @@ func TestPodCgroupPath(t *testing.T) {
 	}
 	if _, err := podCgroupPath(root, "missing"); err == nil {
 		t.Error("want error for unknown pod")
+	}
+}
+
+func TestSampleCifsVolume(t *testing.T) {
+	const share = `\\acct.file.core.windows.net\pvc-c`
+	proc := t.TempDir()
+	write := func(name, data string) {
+		t.Helper()
+		p := filepath.Join(proc, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stats := func(writes, bytes int) string {
+		return fmt.Sprintf("1) %s\nBytes read: 0  Bytes written: %d\nReads: 0 total 0 failed\nWrites: %d total 0 failed\n",
+			share, bytes, writes)
+	}
+	write("1/mountinfo", "600 22 0:297 / /var/lib/kubelet/pods/aaaa-1/volumes/kubernetes.io~csi/pvc-c/mount "+
+		"rw shared:400 - cifs //acct.file.core.windows.net/pvc-c rw\n")
+	write("diskstats", "")
+	write("fs/cifs/Stats", stats(1000, 1_000_000))
+
+	c := &Collector{
+		Config:  Config{ProcRoot: proc, Window: time.Minute},
+		prev:    map[string]reading{},
+		windows: map[string]*Window{},
+	}
+	start := time.Now()
+	if err := c.sample(start); err != nil {
+		t.Fatal(err)
+	}
+	write("fs/cifs/Stats", stats(2000, 11_000_000))
+	if err := c.sample(start.Add(10 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	w := c.windows["0:297"]
+	if w == nil {
+		t.Fatal("no window for the cifs volume")
+	}
+	s, ok := w.Summarize()
+	if !ok {
+		t.Fatal("Summarize not ok")
+	}
+	if s.IOPS != 100 || s.BytesPerSecond != 1_000_000 || s.HasTiming {
+		t.Errorf("summary = %+v, want 100 IOPS, 1 MB/s, no timing", s)
 	}
 }

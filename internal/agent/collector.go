@@ -60,13 +60,14 @@ type Config struct {
 // volume is a CSI filesystem volume mounted on this node.
 type volume struct {
 	pvName string
-	device string
+	kind   kind
+	mount  procfs.Mount
 	// podUIDs are the pods on this node that mount the volume.
 	podUIDs []string
 }
 
 type reading struct {
-	stat procfs.DiskStat
+	stat procfs.Counters
 	at   time.Time
 }
 
@@ -104,13 +105,14 @@ func (c *Collector) Start(ctx context.Context) error {
 	c.claims = make(map[string]claim)
 	c.removed = make(map[string]bool)
 
-	sample := time.NewTicker(c.Config.SampleInterval)
-	defer sample.Stop()
-	publish := time.NewTicker(c.Config.PublishInterval)
-	defer publish.Stop()
+	sampleTicker := time.NewTicker(c.Config.SampleInterval)
+	defer sampleTicker.Stop()
+	publishTicker := time.NewTicker(c.Config.PublishInterval)
+	defer publishTicker.Stop()
 
 	log.Info("Starting volume sampling", "node", c.Config.NodeName,
 		"sampleInterval", c.Config.SampleInterval, "publishInterval", c.Config.PublishInterval)
+
 	if err := c.sample(time.Now()); err != nil {
 		log.Error(err, "Failed to sample volumes")
 	}
@@ -118,14 +120,33 @@ func (c *Collector) Start(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
-		case now := <-sample.C:
+		case now := <-sampleTicker.C:
 			if err := c.sample(now); err != nil {
 				log.Error(err, "Failed to sample volumes")
 			}
-		case <-publish.C:
+		case <-publishTicker.C:
 			c.publish(ctx)
 		}
 	}
+}
+
+// kind is how a volume's I/O is measured.
+type kind string
+
+const (
+	kindBlock kind = "block" // /proc/diskstats
+	kindCifs  kind = "cifs"  // /proc/fs/cifs/Stats
+	kindNone  kind = ""      // nothing can measure it (e.g. NFS, for now)
+)
+
+func mountKind(m procfs.Mount) kind {
+	switch {
+	case !strings.HasPrefix(m.Device, "0:"):
+		return kindBlock
+	case m.FSType == "cifs":
+		return kindCifs
+	}
+	return kindNone
 }
 
 // sample rediscovers the node's volumes and adds one interval per device.
@@ -145,30 +166,49 @@ func (c *Collector) sample(now time.Time) error {
 	if err != nil {
 		return fmt.Errorf("cannot open diskstats: %w", err)
 	}
-	stats, err := procfs.ParseDiskStats(df)
+	disk, err := procfs.ParseDiskStats(df)
 	_ = df.Close()
 	if err != nil {
 		return err
 	}
 
+	var cifs map[string]procfs.Counters // read on the first cifs volume
 	live := make(map[string]bool, len(c.volumes))
 	for _, v := range c.volumes {
-		live[v.device] = true
-		cur, ok := stats[v.device]
+		live[v.mount.Device] = true
+
+		var cur procfs.Counters
+		var ok bool
+		switch v.kind {
+		case kindBlock:
+			var d procfs.DiskStat
+			d, ok = disk[v.mount.Device]
+			cur = d.Counters()
+		case kindCifs:
+			if cifs == nil {
+				if cifs, err = c.readCifsStats(); err != nil {
+					return err
+				}
+			}
+			cur, ok = cifs[v.mount.Source]
+		default:
+			continue // no source can measure it
+		}
 		if !ok {
 			continue
 		}
-		if prev, seen := c.prev[v.device]; seen {
+
+		if prev, seen := c.prev[v.mount.Device]; seen {
 			if iv, ok := procfs.Delta(prev.stat, cur, now.Sub(prev.at)); ok {
-				w := c.windows[v.device]
+				w := c.windows[v.mount.Device]
 				if w == nil {
 					w = NewWindow(c.Config.Window)
-					c.windows[v.device] = w
+					c.windows[v.mount.Device] = w
 				}
 				w.Add(iv)
 			}
 		}
-		c.prev[v.device] = reading{stat: cur, at: now}
+		c.prev[v.mount.Device] = reading{stat: cur, at: now}
 	}
 
 	for pv := range c.claims {
@@ -185,17 +225,30 @@ func (c *Collector) sample(now time.Time) error {
 	return nil
 }
 
+// readCifsStats reads /proc/fs/cifs/Stats. The file is missing when the
+// cifs module isn't loaded, which means no shares.
+func (c *Collector) readCifsStats() (map[string]procfs.Counters, error) {
+	f, err := os.Open(filepath.Join(c.Config.ProcRoot, "fs", "cifs", "Stats"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return map[string]procfs.Counters{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("cannot open cifs stats: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	return procfs.ParseCifsStats(f)
+}
+
 // discoverVolumes finds kubelet CSI filesystem mounts and groups them by PV.
 func discoverVolumes(mounts []procfs.Mount) map[string]volume {
 	vols := make(map[string]volume)
 	for _, m := range mounts {
 		podUID, pv, ok := procfs.ParseCSIMountPoint(m.MountPoint)
-		if !ok || strings.HasPrefix(m.Device, "0:") {
-			// Major 0 is an anonymous device (NFS, tmpfs, ...): no diskstats.
+		if !ok {
 			continue
 		}
 		v := vols[pv]
-		v.pvName, v.device = pv, m.Device
+		v.pvName, v.mount, v.kind = pv, m, mountKind(m)
 		if !slices.Contains(v.podUIDs, podUID) {
 			v.podUIDs = append(v.podUIDs, podUID)
 		}
@@ -208,7 +261,7 @@ func discoverVolumes(mounts []procfs.Mount) map[string]volume {
 func (c *Collector) publish(ctx context.Context) {
 	log := logf.FromContext(ctx).WithName("collector")
 	for _, v := range c.volumes {
-		w := c.windows[v.device]
+		w := c.windows[v.mount.Device]
 		if w == nil {
 			continue
 		}
@@ -386,17 +439,19 @@ func (c *Collector) writeSample(ctx context.Context, cl claim, v volume, s Volum
 	sample.Status = tierdv1.VolumeIOSampleStatus{
 		NodeName:                 c.Config.NodeName,
 		PVName:                   v.pvName,
-		Device:                   v.device,
+		Device:                   v.mount.Device,
 		ObservedAt:               &now,
 		Window:                   metav1.Duration{Duration: s.Span},
 		Samples:                  int32(s.Samples),
 		IOPS:                     int64(math.Round(s.IOPS)),
 		ThroughputBytesPerSecond: int64(math.Round(s.BytesPerSecond)),
-		LatencyP50Micros:         s.LatencyP50.Microseconds(),
-		LatencyP95Micros:         s.LatencyP95.Microseconds(),
-		UtilizationPercent:       int32(math.Round(s.Utilization * 100)),
-		QueueDepth:               milliQuantity(s.QueueDepth),
 		Conditions:               base.Status.Conditions,
+	}
+	if s.HasTiming {
+		sample.Status.LatencyP50Micros = new(s.LatencyP50.Microseconds())
+		sample.Status.LatencyP95Micros = new(s.LatencyP95.Microseconds())
+		sample.Status.UtilizationPercent = new(int32(math.Round(s.Utilization * 100)))
+		sample.Status.QueueDepth = milliQuantity(s.QueueDepth)
 	}
 	if psi != nil {
 		sample.Status.IOPressureSomeAvg60 = milliQuantity(*psi)

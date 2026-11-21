@@ -61,6 +61,9 @@ type VolumeMetrics struct {
 	LatencyP95  time.Duration
 	Utilization float64
 	QueueDepth  float64
+	// HasTiming is false when the source has no timing counters (cifs):
+	// LatencyP50, LatencyP95, Utilization and QueueDepth are unset.
+	HasTiming bool
 }
 
 // Summarize reduces the window. Rates are time-weighted means; ok is false
@@ -69,13 +72,17 @@ func (w *Window) Summarize() (VolumeMetrics, bool) {
 	if len(w.intervals) == 0 {
 		return VolumeMetrics{}, false
 	}
-	s := VolumeMetrics{Samples: len(w.intervals)}
+	// A volume's intervals all come from one source.
+	s := VolumeMetrics{Samples: len(w.intervals), HasTiming: w.intervals[0].HasTiming}
 	var lat []time.Duration
 	for _, iv := range w.intervals {
 		secs := iv.Elapsed.Seconds()
 		s.Span += iv.Elapsed
 		s.IOPS += iv.IOPS * secs
 		s.BytesPerSecond += iv.BytesPerSecond * secs
+		if !s.HasTiming {
+			continue
+		}
 		s.Utilization += iv.Utilization * secs
 		s.QueueDepth += iv.QueueDepth * secs
 		if iv.IOPS > 0 {
@@ -85,9 +92,12 @@ func (w *Window) Summarize() (VolumeMetrics, bool) {
 	total := s.Span.Seconds()
 	s.IOPS /= total
 	s.BytesPerSecond /= total
+	if !s.HasTiming {
+		return s, true
+	}
+
 	s.Utilization /= total
 	s.QueueDepth /= total
-
 	slices.Sort(lat)
 	s.LatencyP50 = percentile(lat, 50)
 	s.LatencyP95 = percentile(lat, 95)

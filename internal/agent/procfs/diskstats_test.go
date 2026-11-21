@@ -56,7 +56,7 @@ func TestDelta(t *testing.T) {
 		ReadsCompleted: 1500, WritesComplete: 2500, SectorsRead: 8000 + 10240, SectorsWritten: 8000 + 10240,
 		ReadTimeMs: 2000, WriteTimeMs: 4000, IOTimeMs: 10000, WeightedTimeMs: 25000,
 	}
-	iv, ok := Delta(prev, cur, 10*time.Second)
+	iv, ok := Delta(prev.Counters(), cur.Counters(), 10*time.Second)
 	if !ok {
 		t.Fatal("Delta not ok")
 	}
@@ -79,13 +79,14 @@ func TestDelta(t *testing.T) {
 
 func TestDeltaRejectsResetAndZeroElapsed(t *testing.T) {
 	prev := DiskStat{ReadsCompleted: 100}
-	if _, ok := Delta(prev, DiskStat{ReadsCompleted: 5}, time.Second); ok {
+	reset := DiskStat{ReadsCompleted: 5}
+	if _, ok := Delta(prev.Counters(), reset.Counters(), time.Second); ok {
 		t.Error("want !ok when a counter goes backwards")
 	}
-	if _, ok := Delta(prev, prev, 0); ok {
+	if _, ok := Delta(prev.Counters(), prev.Counters(), 0); ok {
 		t.Error("want !ok for zero elapsed")
 	}
-	iv, ok := Delta(prev, prev, time.Second)
+	iv, ok := Delta(prev.Counters(), prev.Counters(), time.Second)
 	if !ok || iv.AvgLatency != 0 || iv.IOPS != 0 {
 		t.Errorf("idle interval = %+v, %v", iv, ok)
 	}
@@ -152,12 +153,12 @@ func TestDeltaRejectsEachBackwardsCounter(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			cur := prev
 			regress(&cur)
-			if _, ok := Delta(prev, cur, time.Second); ok {
+			if _, ok := Delta(prev.Counters(), cur.Counters(), time.Second); ok {
 				t.Errorf("want !ok when %s goes backwards", name)
 			}
 		})
 	}
-	if _, ok := Delta(prev, prev, -time.Second); ok {
+	if _, ok := Delta(prev.Counters(), prev.Counters(), -time.Second); ok {
 		t.Error("want !ok for negative elapsed")
 	}
 }
@@ -166,7 +167,7 @@ func TestDeltaClampsUtilization(t *testing.T) {
 	// io_ticks can advance slightly more than wall time between two reads.
 	prev := DiskStat{IOTimeMs: 0}
 	cur := DiskStat{IOTimeMs: 1500}
-	iv, ok := Delta(prev, cur, time.Second)
+	iv, ok := Delta(prev.Counters(), cur.Counters(), time.Second)
 	if !ok {
 		t.Fatal("Delta not ok")
 	}
