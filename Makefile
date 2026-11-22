@@ -88,7 +88,7 @@ setup-test-e2e: kind ## Set up a Kind cluster for e2e tests if it does not exist
 
 .PHONY: test-e2e
 test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
-	KUBECONFIG="$(E2E_KUBECONFIG)" KIND="$(KIND)" KIND_CLUSTER=$(KIND_CLUSTER) CERT_MANAGER_INSTALL_SKIP=true \
+	KUBECONFIG="$(E2E_KUBECONFIG)" KIND="$(KIND)" KIND_CLUSTER=$(KIND_CLUSTER) \
 		go test -tags=e2e ./test/e2e/ -v -ginkgo.v -timeout 30m
 	$(MAKE) cleanup-test-e2e
 
@@ -187,6 +187,7 @@ $(LOCALBIN):
 KUBECTL ?= kubectl
 KIND ?= $(LOCALBIN)/kind
 KUSTOMIZE ?= $(LOCALBIN)/kustomize
+KUBEBUILDER ?= $(LOCALBIN)/kubebuilder
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
@@ -207,10 +208,17 @@ ENVTEST_K8S_VERSION ?= $(shell v='$(call gomodver,k8s.io/api)'; \
 
 GOLANGCI_LINT_VERSION ?= v2.15.0
 KIND_VERSION ?= v0.33.0
+# Matches cliVersion in PROJECT.
+KUBEBUILDER_VERSION ?= v4.16.0
 .PHONY: kustomize
 kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary.
 $(KUSTOMIZE): $(LOCALBIN)
 	$(call go-install-tool,$(KUSTOMIZE),sigs.k8s.io/kustomize/kustomize/v5,$(KUSTOMIZE_VERSION))
+
+.PHONY: kubebuilder
+kubebuilder: $(KUBEBUILDER) ## Download kubebuilder locally if necessary.
+$(KUBEBUILDER): $(LOCALBIN)
+	$(call go-install-tool,$(KUBEBUILDER),sigs.k8s.io/kubebuilder/v4,$(KUBEBUILDER_VERSION))
 
 .PHONY: kind
 kind: $(KIND) ## Download kind locally if necessary.
@@ -264,3 +272,39 @@ endef
 define gomodver
 $(shell go list -m -f '{{if .Replace}}{{.Replace.Version}}{{else}}{{.Version}}{{end}}' $(1) 2>/dev/null)
 endef
+
+##@ Helm Deployment
+
+## Helm binary to use for deploying the chart
+HELM ?= helm
+## Namespace to deploy the Helm release
+HELM_NAMESPACE ?= tierd-system
+## Name of the Helm release
+HELM_RELEASE ?= tierd
+## Path to the Helm chart directory
+HELM_CHART_DIR ?= helm/chart
+## Additional arguments to pass to helm commands
+HELM_EXTRA_ARGS ?=
+
+.PHONY: helm-chart
+helm-chart: kubebuilder ## Regenerate helm/chart from config/. Keeps values.yaml, Chart.yaml and templates/agent.
+	"$(KUBEBUILDER)" edit --plugins=helm/v2-alpha --output-dir=helm
+	@# The plugin emits a static agent DaemonSet and Service and no agent
+	@# ServiceAccount; templates/agent replaces them.
+	rm -f helm/chart/templates/extras/agent.yaml helm/chart/templates/extras/agent-metrics.yaml
+	@rmdir helm/chart/templates/extras 2>/dev/null || true
+
+.PHONY: helm-deploy
+helm-deploy: ## Deploy manager to the K8s cluster via Helm. Specify an image with IMG.
+	IMG="$(IMG)"; $(HELM) upgrade --install $(HELM_RELEASE) $(HELM_CHART_DIR) \
+		--namespace $(HELM_NAMESPACE) \
+		--create-namespace \
+		--set manager.image.repository=$${IMG%:*} \
+		--set manager.image.tag=$${IMG##*:} \
+		--wait \
+		--timeout 5m \
+		$(HELM_EXTRA_ARGS)
+
+.PHONY: helm-uninstall
+helm-uninstall: ## Uninstall the Helm release from the K8s cluster.
+	$(HELM) uninstall $(HELM_RELEASE) --namespace $(HELM_NAMESPACE)

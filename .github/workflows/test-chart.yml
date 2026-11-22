@@ -1,0 +1,61 @@
+name: Test Chart
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-chart:
+    permissions:
+      contents: read
+    name: Run on Ubuntu
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      IMG: tierd.local/tierd:chart
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: go.mod
+
+      # The chart is generated from config/; fail if it wasn't regenerated
+      # after a change there (CRDs, RBAC, manager).
+      - name: Check the chart is up to date
+        run: |
+          make helm-chart
+          git diff --exit-code helm/chart || {
+            echo "::error::helm/chart is out of date: run 'make helm-chart' and commit"
+            exit 1
+          }
+
+      - name: Lint the chart
+        run: helm lint helm/chart
+
+      # make installs the pinned kind version into bin/.
+      - name: Create a kind cluster and load the image
+        run: |
+          make setup-test-e2e docker-build IMG="$IMG"
+          bin/kind load docker-image "$IMG" --name tierd-test-e2e
+
+      - name: Install the chart
+        run: |
+          export KUBECONFIG="$PWD/bin/e2e.kubeconfig"
+          make helm-deploy IMG="$IMG"
+          kubectl -n tierd-system rollout status daemonset/tierd-agent --timeout=3m
+          kubectl apply --dry-run=server -k config/samples
+
+      - name: Uninstall the chart
+        run: KUBECONFIG="$PWD/bin/e2e.kubeconfig" make helm-uninstall

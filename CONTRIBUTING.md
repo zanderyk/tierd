@@ -19,8 +19,8 @@ make test-e2e   # kind-based end-to-end suite, ~7 minutes
 ```
 
 After changing `api/` types or kubebuilder markers, run
-`make manifests generate` and commit the result; CI fails if they are out of
-date. Don't edit generated files (`config/crd/bases`, `config/rbac/role.yaml`,
+`make manifests generate` and commit the result. After changing anything in
+`config/`, also run `make helm-chart`. CI fails if either is out of date. Don't edit generated files (`config/crd/bases`, `config/rbac/role.yaml`,
 `zz_generated.*`) by hand.
 
 To try a change on a cluster:

@@ -42,8 +42,21 @@ A sample's `Measured` condition says which figures are missing.
 
 ## Install
 
-Each release publishes a multi-arch image to `ghcr.io/zanderyk/tierd` and an
-`install.yaml` with the CRDs, controller and agent:
+Each release publishes a multi-arch image to `ghcr.io/zanderyk/tierd`, a Helm
+chart, and an `install.yaml` with the CRDs, controller and agent.
+
+With Helm:
+
+```sh
+helm install tierd oci://ghcr.io/zanderyk/charts/tierd --version <version> \
+  --namespace tierd-system --create-namespace
+```
+
+[helm/chart/values.yaml](helm/chart/values.yaml) lists the settings; the
+`agent` section sets the sampling intervals, tolerations and resources of
+the node agent.
+
+Or with kubectl:
 
 ```sh
 kubectl apply -f https://github.com/zanderyk/tierd/releases/latest/download/install.yaml
@@ -146,49 +159,22 @@ highest tier, or the VM, not the disk, becomes the limit. fio runs at
 `iodepth=32`, which trips node-exporter's `NodeDiskIOSaturation` alert after
 30 minutes; lower it if that alert pages someone.
 
-## Project Distribution
+## Releases
 
-Following the options to release and provide this solution to the users.
+Pushing a `v*` tag builds and publishes the image, chart and `install.yaml`
+(`.github/workflows/release.yml`).
 
-### By providing a bundle with all YAML files
+### Helm chart
 
-1. Build the installer for the image built and published in the registry:
-
-```sh
-make build-installer IMG=<some-registry>/tierd:tag
-```
-
-**NOTE:** The makefile target mentioned above generates an 'install.yaml'
-file in the dist directory. This file contains all the resources built
-with Kustomize, which are necessary to install this project without its
-dependencies.
-
-2. Using the installer
-
-Users can just run 'kubectl apply -f <URL for YAML BUNDLE>' to install
-the project, i.e.:
+`helm/chart` is generated from `config/` by kubebuilder's helm plugin:
 
 ```sh
-kubectl apply -f https://raw.githubusercontent.com/<org>/tierd/<tag or branch>/dist/install.yaml
+make helm-chart
 ```
 
-### By providing a Helm Chart
-
-1. Build the chart using the optional helm plugin
-
-```sh
-kubebuilder edit --plugins=helm/v2-alpha
-```
-
-2. See that a chart was generated under 'dist/chart', and users
-can obtain this solution from there.
-
-**NOTE:** If you change the project, you need to update the Helm Chart
-using the same command above to sync the latest changes. Furthermore,
-if you create webhooks, you need to use the above command with
-the '--force' flag and manually ensure that any custom configuration
-previously added to 'dist/chart/values.yaml' or 'dist/chart/manager/manager.yaml'
-is manually re-applied afterwards.
+It keeps `values.yaml`, `Chart.yaml` and `templates/agent/` (the node
+agent, which the plugin doesn't template), and regenerates the rest. CI fails
+if the chart is out of date.
 
 ## Contributing
 
