@@ -1,5 +1,4 @@
 //go:build e2e
-// +build e2e
 
 /*
 Copyright 2026.
@@ -27,16 +26,13 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
 
 	"github.com/zanderyk/tierd/test/utils"
 )
 
-var (
-	// managerImage is the manager and agent image built and loaded into kind.
-	managerImage = "tierd.local/tierd:e2e"
-	// shouldCleanupCertManager tracks whether CertManager was installed by this suite.
-	shouldCleanupCertManager = false
-)
+// managerImage is the manager and agent image built and loaded into kind.
+const managerImage = "tierd.local/tierd:e2e"
 
 const (
 	agentDaemonSet = "tierd-agent"
@@ -56,23 +52,20 @@ func TestE2E(t *testing.T) {
 }
 
 var _ = BeforeSuite(func() {
+	setupClient()
+
 	By("building the manager image")
-	cmd := exec.Command("make", "docker-build", fmt.Sprintf("IMG=%s", managerImage))
-	_, err := utils.Run(cmd)
-	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the manager image")
+	_, err := utils.Run(exec.Command("make", "docker-build", "IMG="+managerImage))
+	Expect(err).NotTo(HaveOccurred(), "Failed to build the manager image")
 
 	By("loading the manager image on Kind")
-	err = utils.LoadImageToKindClusterWithName(managerImage)
-	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the manager image into Kind")
+	Expect(utils.LoadImageToKindClusterWithName(managerImage)).To(Succeed(), "Failed to load the manager image into Kind")
 
-	configureKubectlKubeRC()
-	setupCertManager()
 	setupHostpathDriver()
 	deployTierd()
-})
 
-var _ = AfterSuite(func() {
-	teardownCertManager()
+	By("creating the StorageClasses and VolumeAttributesClasses")
+	applyFile("test/e2e/testdata/classes.yaml")
 })
 
 // setupHostpathDriver mounts the hostpath data dir on a loop device in the
@@ -87,90 +80,40 @@ truncate -s 2G /var/lib/tierd-e2e.img
 mkfs.ext4 -q -F /var/lib/tierd-e2e.img
 mkdir -p %[1]s
 mount -o loop /var/lib/tierd-e2e.img %[1]s`, hostpathDataDir)
-	cmd := exec.Command("docker", "exec", utils.KindNode(), "sh", "-c", script)
-	_, err := utils.Run(cmd)
+	_, err := utils.Run(exec.Command("docker", "exec", utils.KindNode(), "sh", "-c", script))
 	Expect(err).NotTo(HaveOccurred(), "Failed to mount the hostpath data dir")
 
 	By("deploying the CSI hostpath driver")
-	cmd = exec.Command("kubectl", "apply", "-f", "test/e2e/testdata/csi-hostpath.yaml")
-	_, err = utils.Run(cmd)
-	Expect(err).NotTo(HaveOccurred(), "Failed to deploy the CSI hostpath driver")
-	cmd = exec.Command("kubectl", "rollout", "status", "statefulset/csi-hostpathplugin",
-		"-n", "csi-hostpath", "--timeout=5m")
-	_, err = utils.Run(cmd)
-	Expect(err).NotTo(HaveOccurred(), "CSI hostpath driver did not become ready")
+	applyFile("test/e2e/testdata/csi-hostpath.yaml")
+	waitRolledOut(&appsv1.StatefulSet{Namespace: "csi-hostpath", Name: "csi-hostpathplugin"})
 }
 
-// deployTierd installs the CRDs and deploys the manager and agent. The agent
-// samples every second and publishes every second over a 3s window so the
-// specs' `for` windows can be short.
+// deployTierd installs the CRDs and deploys the manager and agent with
+// kustomize. The agent samples every second and publishes every second over
+// a 3s window so the specs' `for` windows can be short.
 func deployTierd() {
 	By("installing CRDs")
-	cmd := exec.Command("make", "install")
-	_, err := utils.Run(cmd)
+	_, err := utils.Run(exec.Command("make", "install"))
 	Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
 
 	By("deploying the controller-manager and agent")
-	cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", managerImage))
-	_, err = utils.Run(cmd)
+	_, err = utils.Run(exec.Command("make", "deploy", "IMG="+managerImage))
 	Expect(err).NotTo(HaveOccurred(), "Failed to deploy tierd")
 
 	By("speeding up the agent")
-	cmd = exec.Command("kubectl", "patch", "daemonset", agentDaemonSet, "-n", namespace, "--type=json", "-p",
-		`[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--sample-interval=1s"},
-		  {"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--publish-interval=1s"},
-		  {"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--window=3s"}]`)
-	_, err = utils.Run(cmd)
-	Expect(err).NotTo(HaveOccurred(), "Failed to patch the agent")
+	agent := &appsv1.DaemonSet{Namespace: namespace, Name: agentDaemonSet}
+	update(agent, func(ds *appsv1.DaemonSet) {
+		c := &ds.Spec.Template.Spec.Containers[0]
+		c.Args = append(c.Args, "--sample-interval=1s", "--publish-interval=1s", "--window=3s")
+	})
 
-	for _, workload := range []string{"daemonset/" + agentDaemonSet, "deployment/tierd-controller-manager"} {
-		cmd = exec.Command("kubectl", "rollout", "status", workload, "-n", namespace, "--timeout=5m")
-		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "%s did not become ready", workload)
-	}
+	waitRolledOut(agent)
+	waitRolledOut(&appsv1.Deployment{Namespace: namespace, Name: "tierd-controller-manager"})
 }
 
-func configureKubectlKubeRC() {
+func init() {
+	// kubectl reads the user's kuberc unless told not to; make runs it.
 	if os.Getenv("KUBECTL_KUBERC") != "true" {
-		By("disabling kubectl kuberc for test isolation")
-		err := os.Setenv("KUBECTL_KUBERC", "false")
-		ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to disable kubectl kuberc")
-		_, _ = fmt.Fprintf(GinkgoWriter,
-			"kubectl kuberc disabled for consistent test behavior (override with KUBECTL_KUBERC=true)\n")
-	} else {
-		_, _ = fmt.Fprintf(GinkgoWriter, "kubectl kuberc enabled (KUBECTL_KUBERC=true)\n")
+		_ = os.Setenv("KUBECTL_KUBERC", "false")
 	}
-}
-
-// setupCertManager installs CertManager if needed for webhook tests.
-// Skips installation if CERT_MANAGER_INSTALL_SKIP=true or if already present.
-func setupCertManager() {
-	if os.Getenv("CERT_MANAGER_INSTALL_SKIP") == "true" {
-		_, _ = fmt.Fprintf(GinkgoWriter, "Skipping CertManager installation (CERT_MANAGER_INSTALL_SKIP=true)\n")
-		return
-	}
-
-	By("checking if CertManager is already installed")
-	if utils.IsCertManagerCRDsInstalled() {
-		_, _ = fmt.Fprintf(GinkgoWriter, "CertManager is already installed. Skipping installation.\n")
-		return
-	}
-
-	// Mark for cleanup before installation to handle interruptions and partial installs.
-	shouldCleanupCertManager = true
-
-	By("installing CertManager")
-	Expect(utils.InstallCertManager()).To(Succeed(), "Failed to install CertManager")
-}
-
-// teardownCertManager uninstalls CertManager if it was installed by setupCertManager.
-// This ensures we only remove what we installed.
-func teardownCertManager() {
-	if !shouldCleanupCertManager {
-		_, _ = fmt.Fprintf(GinkgoWriter, "Skipping CertManager cleanup (not installed by this suite)\n")
-		return
-	}
-
-	By("uninstalling CertManager")
-	utils.UninstallCertManager()
 }

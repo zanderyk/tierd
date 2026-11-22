@@ -1,0 +1,95 @@
+# An NFS server and an SMB server for the measurement-source specs. They keep
+# their data on the node's own disk, not the loop device the hostpath volumes
+# share.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tierd-sources
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nfs-server
+  namespace: tierd-sources
+spec:
+  selector:
+    app: nfs-server
+  ports:
+  - {name: nfs, port: 2049}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nfs-server
+  namespace: tierd-sources
+spec:
+  selector:
+    matchLabels:
+      app: nfs-server
+  template:
+    metadata:
+      labels:
+        app: nfs-server
+    spec:
+      containers:
+      - name: nfs-server
+        image: itsthenetwork/nfs-server-alpine:12
+        env:
+        - {name: SHARED_DIRECTORY, value: /exports}
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - {name: data, mountPath: /exports}
+      volumes:
+      - name: data
+        hostPath: {path: /var/lib/tierd-nfs, type: DirectoryOrCreate}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: smbcreds
+  namespace: tierd-sources
+stringData:
+  username: tierd
+  password: tierd-e2e
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: smb-server
+  namespace: tierd-sources
+spec:
+  selector:
+    app: smb-server
+  ports:
+  - {name: smb, port: 445}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: smb-server
+  namespace: tierd-sources
+spec:
+  selector:
+    matchLabels:
+      app: smb-server
+  template:
+    metadata:
+      labels:
+        app: smb-server
+    spec:
+      containers:
+      - name: smb-server
+        image: andyzhangx/samba:win-fix
+        env:
+        - {name: PERMISSIONS, value: "0777"}
+        - name: USERNAME
+          valueFrom: {secretKeyRef: {name: smbcreds, key: username}}
+        - name: PASSWORD
+          valueFrom: {secretKeyRef: {name: smbcreds, key: password}}
+        args: ["-u", "$(USERNAME);$(PASSWORD)", "-s", "share;/smbshare/;yes;no;no;all;none", "-p"]
+        volumeMounts:
+        - {name: data, mountPath: /smbshare}
+      volumes:
+      - name: data
+        hostPath: {path: /var/lib/tierd-smb, type: DirectoryOrCreate}

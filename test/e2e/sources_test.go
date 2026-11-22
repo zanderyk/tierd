@@ -1,5 +1,4 @@
 //go:build e2e
-// +build e2e
 
 /*
 Copyright 2026.
@@ -20,16 +19,16 @@ limitations under the License.
 package e2e
 
 import (
-	"fmt"
-	"os/exec"
-	"strconv"
-	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/zanderyk/tierd/test/utils"
+	tierdv1 "github.com/zanderyk/tierd/api/v1"
+	"github.com/zanderyk/tierd/internal/controller"
 )
 
 const (
@@ -39,160 +38,30 @@ const (
 	smbDriverURL = "https://raw.githubusercontent.com/kubernetes-csi/csi-driver-smb/v1.20.4/deploy/v1.20.4/"
 )
 
-// sourcesSetup is an NFS server and an SMB server in the cluster, their
-// StorageClasses, and VolumeAttributesClasses for the two drivers. Neither
-// driver can modify volumes, so their policies only recommend; the PVCs have
-// no class and are adopted. The servers keep their data on the node's own
-// disk, not the loop device the hostpath volumes share.
-const sourcesSetup = `
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: tierd-sources
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: nfs-server
-  namespace: tierd-sources
-spec:
-  selector:
-    app: nfs-server
-  ports:
-  - {name: nfs, port: 2049}
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: nfs-server
-  namespace: tierd-sources
-spec:
-  selector:
-    matchLabels:
-      app: nfs-server
-  template:
-    metadata:
-      labels:
-        app: nfs-server
-    spec:
-      containers:
-      - name: nfs-server
-        image: itsthenetwork/nfs-server-alpine:12
-        env:
-        - {name: SHARED_DIRECTORY, value: /exports}
-        securityContext:
-          privileged: true
-        volumeMounts:
-        - {name: data, mountPath: /exports}
-      volumes:
-      - name: data
-        hostPath: {path: /var/lib/tierd-nfs, type: DirectoryOrCreate}
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: smbcreds
-  namespace: tierd-sources
-stringData:
-  username: tierd
-  password: tierd-e2e
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: smb-server
-  namespace: tierd-sources
-spec:
-  selector:
-    app: smb-server
-  ports:
-  - {name: smb, port: 445}
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: smb-server
-  namespace: tierd-sources
-spec:
-  selector:
-    matchLabels:
-      app: smb-server
-  template:
-    metadata:
-      labels:
-        app: smb-server
-    spec:
-      containers:
-      - name: smb-server
-        image: andyzhangx/samba:win-fix
-        env:
-        - {name: PERMISSIONS, value: "0777"}
-        - name: USERNAME
-          valueFrom: {secretKeyRef: {name: smbcreds, key: username}}
-        - name: PASSWORD
-          valueFrom: {secretKeyRef: {name: smbcreds, key: password}}
-        args: ["-u", "$(USERNAME);$(PASSWORD)", "-s", "share;/smbshare/;yes;no;no;all;none", "-p"]
-        volumeMounts:
-        - {name: data, mountPath: /smbshare}
-      volumes:
-      - name: data
-        hostPath: {path: /var/lib/tierd-smb, type: DirectoryOrCreate}
----
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-  name: e2e-nfs
-provisioner: nfs.csi.k8s.io
-parameters:
-  server: nfs-server.tierd-sources.svc.cluster.local
-  share: /
-mountOptions: [nfsvers=4.1]
----
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-  name: e2e-smb
-provisioner: smb.csi.k8s.io
-parameters:
-  source: //smb-server.tierd-sources.svc.cluster.local/share
-  csi.storage.k8s.io/provisioner-secret-name: smbcreds
-  csi.storage.k8s.io/provisioner-secret-namespace: tierd-sources
-  csi.storage.k8s.io/node-stage-secret-name: smbcreds
-  csi.storage.k8s.io/node-stage-secret-namespace: tierd-sources
-mountOptions: [dir_mode=0777, file_mode=0777, noperm, mfsymlinks, cache=strict, noserverino]
----
-apiVersion: storage.k8s.io/v1
-kind: VolumeAttributesClass
-metadata:
-  name: e2e-nfs-base
-driverName: nfs.csi.k8s.io
-parameters:
-  tier: base
----
-apiVersion: storage.k8s.io/v1
-kind: VolumeAttributesClass
-metadata:
-  name: e2e-nfs-fast
-driverName: nfs.csi.k8s.io
-parameters:
-  tier: fast
----
-apiVersion: storage.k8s.io/v1
-kind: VolumeAttributesClass
-metadata:
-  name: e2e-smb-base
-driverName: smb.csi.k8s.io
-parameters:
-  tier: base
----
-apiVersion: storage.k8s.io/v1
-kind: VolumeAttributesClass
-metadata:
-  name: e2e-smb-fast
-driverName: smb.csi.k8s.io
-parameters:
-  tier: fast
-`
+// source is one kind of volume the agent measures: a PVC with a policy over
+// its driver's tiers, and a fio pod writing to it.
+type source struct {
+	name       string
+	sc         string
+	mode       tierdv1.VolumeTierPolicyMode
+	base, fast string
+	// tier is the PVC's starting tier; empty means tierd adopts it.
+	tier          string
+	block, direct bool
+}
+
+// sources: the hostpath block volume can be tiered. The NFS and SMB drivers
+// can't modify volumes, so their policies only recommend, and their PVCs
+// start without a class. cifs needs cache=none for O_DIRECT, so the SMB pod
+// fsyncs each write instead.
+var sources = []source{
+	{name: "block", sc: "e2e-hostpath", mode: tierdv1.VolumeTierPolicyModeAct, base: tierBase, fast: tierFast,
+		tier: tierBase, block: true, direct: true},
+	{name: "nfs", sc: "e2e-nfs", mode: tierdv1.VolumeTierPolicyModeRecommend, base: "e2e-nfs-base",
+		fast: "e2e-nfs-fast", direct: true},
+	{name: "smb", sc: "e2e-smb", mode: tierdv1.VolumeTierPolicyModeRecommend, base: "e2e-smb-base",
+		fast: "e2e-smb-fast"},
+}
 
 var _ = Describe("Measurement sources", Ordered, func() {
 	SetDefaultEventuallyTimeout(4 * time.Minute)
@@ -200,75 +69,69 @@ var _ = Describe("Measurement sources", Ordered, func() {
 
 	BeforeAll(func() {
 		By("installing the NFS and SMB CSI drivers")
-		args := []string{"apply"}
-		for _, f := range []string{"rbac-csi-nfs.yaml", "csi-nfs-driverinfo.yaml", "csi-nfs-controller.yaml", "csi-nfs-node.yaml"} {
-			args = append(args, "-f", nfsDriverURL+f)
+		for _, f := range []string{"rbac-csi-nfs.yaml", "csi-nfs-driverinfo.yaml",
+			"csi-nfs-controller.yaml", "csi-nfs-node.yaml"} {
+			applyURL(nfsDriverURL + f)
 		}
-		for _, f := range []string{"rbac-csi-smb.yaml", "csi-smb-driver.yaml", "csi-smb-controller.yaml", "csi-smb-node.yaml"} {
-			args = append(args, "-f", smbDriverURL+f)
+		for _, f := range []string{"rbac-csi-smb.yaml", "csi-smb-driver.yaml",
+			"csi-smb-controller.yaml", "csi-smb-node.yaml"} {
+			applyURL(smbDriverURL + f)
 		}
-		kubectl(args...)
 
-		By("creating the servers, StorageClasses and tiers")
-		apply(hostpathTiers + "---" + sourcesSetup)
+		By("creating the NFS and SMB servers")
+		applyFile("test/e2e/testdata/servers.yaml")
 
 		By("creating a PVC, policy and fio pod per source")
-		apply(policyIn(sourcesNS, "block", "e2e-block", "Act", tierBase, tierFast) + "---" +
-			pvcIn(sourcesNS, "block", "e2e-block", "e2e-hostpath", tierBase, true) + "---" +
-			loadPodIn(sourcesNS, "block", "block", "sustained", true, true) + "---" +
-			policyIn(sourcesNS, "nfs", "e2e-nfs", "Recommend", "e2e-nfs-base", "e2e-nfs-fast") + "---" +
-			pvcIn(sourcesNS, "nfs", "e2e-nfs", "e2e-nfs", "", false) + "---" +
-			loadPodIn(sourcesNS, "nfs", "nfs", "sustained", false, true) + "---" +
-			policyIn(sourcesNS, "smb", "e2e-smb", "Recommend", "e2e-smb-base", "e2e-smb-fast") + "---" +
-			pvcIn(sourcesNS, "smb", "e2e-smb", "e2e-smb", "", false) + "---" +
-			// cifs needs cache=none for O_DIRECT; fsync each write instead.
-			loadPodIn(sourcesNS, "smb", "smb", "sustained", false, false))
-
-		for _, w := range []string{"deployment/csi-nfs-controller", "daemonset/csi-nfs-node",
-			"deployment/csi-smb-controller", "daemonset/csi-smb-node"} {
-			kubectl("rollout", "status", w, "-n", "kube-system", "--timeout=5m")
+		for _, s := range sources {
+			app := "e2e-" + s.name
+			create(newPolicy(sourcesNS, s.name, app, s.mode, s.base, s.fast),
+				newPVC(sourcesNS, s.name, app, s.sc, s.tier, s.block),
+				newLoadPod(sourcesNS, s.name, s.name, "sustained", s.block, s.direct))
 		}
-		kubectl("wait", "pod", "--all", "-n", sourcesNS, "--for=condition=Ready", "--timeout=5m")
+
+		for _, name := range []string{"csi-nfs-controller", "csi-smb-controller"} {
+			waitRolledOut(&appsv1.Deployment{Namespace: "kube-system", Name: name})
+		}
+		for _, name := range []string{"csi-nfs-node", "csi-smb-node"} {
+			waitRolledOut(&appsv1.DaemonSet{Namespace: "kube-system", Name: name})
+		}
+		for _, s := range sources {
+			Eventually(func() bool { return podReady(sourcesNS, s.name) }, 5*time.Minute).
+				Should(BeTrue(), "fio pod %s did not become ready", s.name)
+		}
 	})
 
 	AfterAll(func() {
 		// Delete the fio pods first: deleting the namespace would take the
 		// NFS and SMB servers down before the pods unmount, and the
 		// unmounts hang.
-		_, _ = utils.Run(exec.Command("kubectl", "delete", "pod", "block", "nfs", "smb", "-n", sourcesNS, "--timeout=2m"))
-		_, _ = utils.Run(exec.Command("kubectl", "delete", "ns", sourcesNS, "--timeout=2m"))
+		for _, s := range sources {
+			removeAndWait(&corev1.Pod{Namespace: sourcesNS, Name: s.name})
+		}
+		removeAndWait(&corev1.Namespace{Name: sourcesNS})
 	})
 
 	AfterEach(func() {
-		if !CurrentSpecReport().Failed() {
-			return
-		}
-		for _, args := range [][]string{
-			{"get", "vtp,vts,volumeiosample,pvc,pod", "-n", sourcesNS, "-o", "yaml"},
-			{"get", "events", "-n", sourcesNS, "--sort-by=.lastTimestamp"},
-			{"logs", "daemonset/" + agentDaemonSet, "-n", namespace, "--tail=100"},
-		} {
-			out, _ := utils.Run(exec.Command("kubectl", args...))
-			_, _ = fmt.Fprintf(GinkgoWriter, "kubectl %s:\n%s\n", strings.Join(args, " "), out)
+		if CurrentSpecReport().Failed() {
+			dumpDiagnostics(sourcesNS)
 		}
 	})
 
 	It("measures and tiers a block-mode volume", func() {
-		expectMeasured("block", "Complete")
-		Eventually(func() string { return getIn(sourcesNS, "pvc", "block", "{.status.currentVolumeAttributesClassName}") }).
-			Should(Equal(tierFast))
+		expectMeasured("block", tierdv1.MeasuredComplete)
+		Eventually(func() string { return currentTier(sourcesNS, "block") }).Should(Equal(tierFast))
 	})
 
 	It("measures an NFS volume, with latency", func() {
-		expectMeasured("nfs", "Partial")
-		Expect(getIn(sourcesNS, "volumeiosample", "nfs", "{.status.latencyP95Micros}")).NotTo(BeEmpty())
-		Eventually(func() string { return getIn(sourcesNS, "vts", "nfs", "{.status.recommendedTier}") }).
+		expectMeasured("nfs", tierdv1.MeasuredPartial)
+		Expect(getSample(sourcesNS, "nfs").Status.LatencyP95Micros).NotTo(BeNil())
+		Eventually(func() string { return getVTS(sourcesNS, "nfs").Status.RecommendedTier }).
 			Should(Equal("e2e-nfs-fast"))
 	})
 
 	It("measures an SMB volume on a subdirectory of its share", func() {
-		expectMeasured("smb", "Partial")
-		Eventually(func() string { return getIn(sourcesNS, "vts", "smb", "{.status.recommendedTier}") }).
+		expectMeasured("smb", tierdv1.MeasuredPartial)
+		Eventually(func() string { return getVTS(sourcesNS, "smb").Status.RecommendedTier }).
 			Should(Equal("e2e-smb-fast"))
 	})
 })
@@ -278,13 +141,10 @@ var _ = Describe("Measurement sources", Ordered, func() {
 func expectMeasured(pvc, reason string) {
 	GinkgoHelper()
 	Eventually(func() string {
-		return getIn(sourcesNS, "volumeiosample", pvc, `{.status.conditions[?(@.type=="Measured")].reason}`)
+		return condition(getSample(sourcesNS, pvc).Status.Conditions, tierdv1.VolumeIOSampleMeasured).Reason
 	}).Should(Equal(reason))
-	Eventually(func() int {
-		n, _ := strconv.Atoi(getIn(sourcesNS, "volumeiosample", pvc, "{.status.iops}"))
-		return n
-	}).Should(BeNumerically(">", 100))
-	Eventually(func() string {
-		return getIn(sourcesNS, "vts", pvc, `{.status.conditions[?(@.type=="Managed")].status}`)
-	}).Should(Equal("True"))
+	Eventually(func() int64 { return getSample(sourcesNS, pvc).Status.IOPS }).Should(BeNumerically(">", 100))
+	Eventually(func() metav1.ConditionStatus {
+		return condition(getVTS(sourcesNS, pvc).Status.Conditions, controller.ConditionVTSManaged).Status
+	}).Should(Equal(metav1.ConditionTrue))
 }
