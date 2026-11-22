@@ -165,3 +165,30 @@ func recommend(
 func tierIndex(spec tierdv1.VolumeTierPolicySpec, name string) int {
 	return slices.IndexFunc(spec.Tiers, func(t tierdv1.Tier) bool { return t.VACName == name })
 }
+
+// pickTier chooses the starting tier for a PVC with no VolumeAttributesClass:
+// the lowest tier whose ceilings fit the sample's load under the scale-up
+// threshold (100% if none is set), or the highest tier with ceilings if
+// none fits. ok is false when no tier declares ceilings, since the load
+// can't be compared then.
+func pickTier(spec tierdv1.VolumeTierPolicySpec, s tierdv1.VolumeIOSampleStatus) (tier, why string, ok bool) {
+	limit := 100.0
+	if spec.ScaleUp.UtilizationAbove != nil {
+		limit = float64(*spec.ScaleUp.UtilizationAbove)
+	}
+	highest := ""
+	for _, t := range spec.Tiers {
+		pct, hasCeilings := ceilingPercent(t.Ceilings, s)
+		if !hasCeilings {
+			continue
+		}
+		if pct < limit {
+			return t.VACName, fmt.Sprintf("adopting: load is %.0f%% of %s", pct, t.VACName), true
+		}
+		highest = t.VACName
+	}
+	if highest == "" {
+		return "", "", false
+	}
+	return highest, fmt.Sprintf("adopting: load exceeds every tier, using the highest, %s", highest), true
+}

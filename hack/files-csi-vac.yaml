@@ -1,0 +1,50 @@
+# Azure Files tiers. Only provisioned v2 shares (PremiumV2_LRS / StandardV2_*)
+# accept these; v1 shares fail with Azure 400 FeatureNotSupported.
+apiVersion: storage.k8s.io/v1
+kind: VolumeAttributesClass
+metadata:
+  name: files-base
+driverName: file.csi.azure.com
+parameters:
+  provisionedIOPS: "3000"
+  provisionedBandwidth: "125"
+---
+apiVersion: storage.k8s.io/v1
+kind: VolumeAttributesClass
+metadata:
+  name: files-fast
+driverName: file.csi.azure.com
+parameters:
+  provisionedIOPS: "6000"
+  provisionedBandwidth: "250"
+---
+apiVersion: tierd.zanderyk.github.io/v1
+kind: VolumeTierPolicy
+metadata:
+  name: tierd-files
+  namespace: tierd-test
+spec:
+  mode: Act
+  selector:
+    matchLabels:
+      app: tierd-test3
+  # No latency trigger: NFS/SMB per-op latency is mostly round trip and I/O
+  # size, not saturation. Files have no utilization, so tierd scales on the
+  # ceilings instead (load vs. 80% of the tier's iops/throughput).
+  scaleUp:
+    for: 1m
+    ioPressureAbove: 20
+    utilizationAbove: 80
+  scaleDown:
+    for: 1h
+    ioPressureBelow: 1
+    utilizationBelow: 30
+  tiers:
+  - name: files-base
+    ceilings:
+      iops: 3000
+      throughputMiBps: 125
+  - name: files-fast
+    ceilings:
+      iops: 6000
+      throughputMiBps: 250

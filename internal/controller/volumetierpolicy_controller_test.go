@@ -44,6 +44,11 @@ var _ = Describe("VolumeTierPolicy Controller", func() {
 		pvcName   = "test-pvc"
 		policyA   = "policy-a"
 		policyB   = "policy-b"
+		scName    = "test-sc"
+
+		otherDriver = "other.csi.example.com"
+		otherLow    = "other-tier-low"
+		otherHigh   = "other-tier-high"
 	)
 	pvcLabels := map[string]string{"app": "test-db"}
 
@@ -105,7 +110,8 @@ var _ = Describe("VolumeTierPolicy Controller", func() {
 	}
 
 	BeforeEach(func() {
-		By("creating the tier VolumeAttributesClasses and a labelled PVC")
+		By("creating the tier VolumeAttributesClasses, a StorageClass and a labelled PVC")
+		Expect(k8sClient.Create(ctx, &storagev1.StorageClass{Name: scName, Provisioner: driver})).To(Succeed())
 		for _, name := range []string{vacLow, vacHigh} {
 			Expect(k8sClient.Create(ctx, &storagev1.VolumeAttributesClass{
 				Name:       name,
@@ -118,7 +124,8 @@ var _ = Describe("VolumeTierPolicy Controller", func() {
 			Namespace: namespace,
 			Labels:    pvcLabels,
 			Spec: corev1.PersistentVolumeClaimSpec{
-				AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+				StorageClassName: ptr.To(scName),
+				AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 				Resources: corev1.VolumeResourceRequirements{
 					Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")},
 				},
@@ -136,9 +143,76 @@ var _ = Describe("VolumeTierPolicy Controller", func() {
 		deleteIgnoreNotFound(&zanderykgithubiov1.VolumeTierState{Name: pvcName, Namespace: namespace})
 
 		forceDelete(&corev1.PersistentVolumeClaim{Name: pvcName, Namespace: namespace})
-		for _, name := range []string{vacLow, vacHigh} {
+		for _, name := range []string{vacLow, vacHigh, otherLow, otherHigh} {
 			forceDelete(&storagev1.VolumeAttributesClass{Name: name})
 		}
+		deleteIgnoreNotFound(&storagev1.StorageClass{Name: scName})
+	})
+
+	// newOtherPolicy is a policy with the same selector whose tiers use
+	// otherDriver.
+	newOtherPolicy := func(name string) *zanderykgithubiov1.VolumeTierPolicy {
+		for _, vac := range []string{otherLow, otherHigh} {
+			Expect(k8sClient.Create(ctx, &storagev1.VolumeAttributesClass{
+				Name:       vac,
+				DriverName: otherDriver,
+				Parameters: map[string]string{"tier": vac},
+			})).To(Succeed())
+		}
+		vtp := newPolicy(name)
+		vtp.Spec.Tiers = []zanderykgithubiov1.Tier{{VACName: otherLow}, {VACName: otherHigh}}
+		return vtp
+	}
+
+	It("skips PVCs of another driver and says so on Ready", func() {
+		Expect(k8sClient.Create(ctx, newOtherPolicy(policyB))).To(Succeed())
+		reconcileVTP(policyB)
+
+		vtp := getPolicy(policyB)
+		Expect(vtp.Status.PVCs).To(BeEmpty())
+		cond := meta.FindStatusCondition(vtp.Status.Conditions, string(ConditionVTPReady))
+		Expect(cond).NotTo(BeNil())
+		Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+		Expect(cond.Message).To(ContainSubstring("Skipped PVCs of other drivers: %s (%s)", pvcName, driver))
+		Expect(errors.IsNotFound(k8sClient.Get(ctx,
+			types.NamespacedName{Namespace: namespace, Name: pvcName}, &zanderykgithubiov1.VolumeTierState{}))).To(BeTrue())
+	})
+
+	It("does not report Conflict for policies of different drivers with the same selector", func() {
+		Expect(k8sClient.Create(ctx, newPolicy(policyA))).To(Succeed())
+		Expect(k8sClient.Create(ctx, newOtherPolicy(policyB))).To(Succeed())
+		reconcileVTP(policyB)
+		reconcileVTP(policyA)
+
+		Expect(getState().Status.PolicyRef).To(Equal(policyA))
+		for _, name := range []string{policyA, policyB} {
+			Expect(meta.IsStatusConditionFalse(getPolicy(name).Status.Conditions, string(ConditionVTPConflict))).To(BeTrue())
+		}
+	})
+
+	It("reads the driver from the bound PV when the PVC has no StorageClass", func() {
+		r := &VolumeTierPolicyReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+		pv := &corev1.PersistentVolume{
+			Name: "test-pv",
+			Spec: corev1.PersistentVolumeSpec{
+				Capacity:    corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")},
+				AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+				PersistentVolumeSource: corev1.PersistentVolumeSource{
+					CSI: &corev1.CSIPersistentVolumeSource{Driver: otherDriver, VolumeHandle: "h"},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, pv)).To(Succeed())
+		DeferCleanup(forceDelete, pv)
+
+		static := &corev1.PersistentVolumeClaim{Spec: corev1.PersistentVolumeClaimSpec{
+			StorageClassName: new(""),
+			VolumeName:       pv.Name,
+		}}
+		Expect(r.pvcDriver(ctx, static)).To(Equal(otherDriver))
+
+		static.Spec.VolumeName = ""
+		Expect(r.pvcDriver(ctx, static)).To(BeEmpty())
 	})
 
 	It("assigns the PVC to the only matching policy", func() {

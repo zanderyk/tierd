@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/events"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -344,8 +345,12 @@ func TestSyncOverride(t *testing.T) {
 			wantOverride: true, wantAnnotated: true,
 		},
 		{
-			name:    "annotation removed resumes from the spec tier",
-			specVAC: tierBase, status: tierdv1.VolumeTierStateStatus{LastAppliedTier: tierFast, Conditions: overridden},
+			name:    "annotation removed resumes from the spec tier with a fresh window",
+			specVAC: tierBase,
+			status: tierdv1.VolumeTierStateStatus{
+				LastAppliedTier: tierFast, Conditions: overridden,
+				PendingDirection: tierdv1.ScaleDirectionUp, PendingSince: new(metav1.Now()),
+			},
 			wantLast: tierBase,
 		},
 	}
@@ -379,17 +384,24 @@ func TestSyncOverride(t *testing.T) {
 			if vts.Status.LastAppliedTier != tt.wantLast {
 				t.Errorf("LastAppliedTier = %q, want %q", vts.Status.LastAppliedTier, tt.wantLast)
 			}
+			if tt.status.PendingSince != nil && (vts.Status.PendingSince != nil || vts.Status.PendingDirection != tierdv1.ScaleDirectionNone) {
+				t.Errorf("pending = %s since %v, want cleared on resume", vts.Status.PendingDirection, vts.Status.PendingSince)
+			}
 		})
 	}
 }
 
-// testPVC is the PVC (and state and sample) reconcileOnce works on.
-const testPVC = "data"
+// testPVC is the PVC (and state and sample) the reconcile tests work on.
+const (
+	testPVC    = "data"
+	testPolicy = "policy"
+)
 
-// reconcileOnce reconciles a bound PVC "ns/data" whose state points at an
-// existing policy, starting from a stale MissingPolicy condition, and returns
-// the state's Managed condition.
-func reconcileOnce(t *testing.T, extra ...client.Object) *metav1.Condition {
+var testKey = types.NamespacedName{Namespace: "ns", Name: testPVC}
+
+// reconcileWith reconciles testKey once against a fake client holding objs
+// and returns the client.
+func reconcileWith(t *testing.T, objs ...client.Object) client.Client {
 	t.Helper()
 	scheme := runtime.NewScheme()
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
@@ -398,36 +410,48 @@ func reconcileOnce(t *testing.T, extra ...client.Object) *metav1.Condition {
 	if err := tierdv1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
-	key := types.NamespacedName{Namespace: "ns", Name: testPVC}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
+		WithStatusSubresource(&tierdv1.VolumeTierState{}).Build()
+	r := &VolumeTierStateReconciler{Client: c, Recorder: events.NewFakeRecorder(10)}
+	if _, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: testKey}); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// getState returns testKey's VolumeTierState.
+func getState(t *testing.T, c client.Client) *tierdv1.VolumeTierState {
+	t.Helper()
+	got := &tierdv1.VolumeTierState{}
+	if err := c.Get(t.Context(), testKey, got); err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+// reconcileOnce reconciles a bound PVC whose state points at an existing
+// policy, starting from a stale MissingPolicy condition, and returns the
+// state's Managed condition.
+func reconcileOnce(t *testing.T, extra ...client.Object) *metav1.Condition {
+	t.Helper()
 	pvc := &corev1.PersistentVolumeClaim{
-		Namespace: key.Namespace, Name: key.Name,
+		Namespace: testKey.Namespace, Name: testKey.Name,
 		Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
 	}
-	vtp := &tierdv1.VolumeTierPolicy{Namespace: key.Namespace, Name: "policy"}
+	vtp := &tierdv1.VolumeTierPolicy{Namespace: testKey.Namespace, Name: testPolicy}
 	// A stale condition from before the policy controller set policyRef.
 	vts := &tierdv1.VolumeTierState{
-		Namespace: key.Namespace, Name: key.Name,
+		Namespace: testKey.Namespace, Name: testKey.Name,
 		Status: tierdv1.VolumeTierStateStatus{
-			PolicyRef: "policy",
+			PolicyRef: testPolicy,
 			Conditions: []metav1.Condition{{
 				Type: ConditionVTSManaged, Status: metav1.ConditionFalse,
 				Reason: ConditionReasonMissingPolicy, Message: "policy ref is empty",
 			}},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(append([]client.Object{pvc, vtp, vts}, extra...)...).
-		WithStatusSubresource(vts).Build()
-	r := &VolumeTierStateReconciler{Client: c, Recorder: events.NewFakeRecorder(10)}
-
-	if _, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: key}); err != nil {
-		t.Fatal(err)
-	}
-	got := &tierdv1.VolumeTierState{}
-	if err := c.Get(t.Context(), key, got); err != nil {
-		t.Fatal(err)
-	}
-	return meta.FindStatusCondition(got.Status.Conditions, ConditionVTSManaged)
+	c := reconcileWith(t, append([]client.Object{pvc, vtp, vts}, extra...)...)
+	return meta.FindStatusCondition(getState(t, c).Status.Conditions, ConditionVTSManaged)
 }
 
 func TestReconcileWithoutSample(t *testing.T) {
@@ -449,5 +473,143 @@ func TestReconcileUnmeasurableVolume(t *testing.T) {
 	cond := reconcileOnce(t, sample)
 	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != tierdv1.MeasuredNoSource || cond.Message != msg {
 		t.Errorf("Managed = %+v, want False/%s %q", cond, tierdv1.MeasuredNoSource, msg)
+	}
+}
+
+func TestPickTier(t *testing.T) {
+	tier := func(name string, iops int64) tierdv1.Tier {
+		return tierdv1.Tier{VACName: name, Ceilings: &tierdv1.Ceiling{IOPS: new(iops)}}
+	}
+	spec := tierdv1.VolumeTierPolicySpec{
+		Tiers:   []tierdv1.Tier{tier(tierBase, 1000), tier(tierFast, 5000), tier("ultra", 20000)},
+		ScaleUp: tierdv1.ScaleUp{UtilizationAbove: new(int32(80))},
+	}
+	noCeilings := tierdv1.VolumeTierPolicySpec{Tiers: []tierdv1.Tier{{VACName: "a"}, {VACName: "b"}}}
+	topOnly := tierdv1.VolumeTierPolicySpec{Tiers: []tierdv1.Tier{{VACName: "a"}, tier("b", 1000)}}
+
+	tests := []struct {
+		name   string
+		spec   tierdv1.VolumeTierPolicySpec
+		iops   int64
+		want   string
+		wantOK bool
+	}{
+		{"fits the lowest tier", spec, 500, tierBase, true},
+		{"over the lowest tier's threshold", spec, 852, tierFast, true},
+		{"exactly at the threshold moves up", spec, 800, tierFast, true},
+		{"exceeds every tier", spec, 30000, "ultra", true},
+		{"no threshold means 100%", tierdv1.VolumeTierPolicySpec{Tiers: spec.Tiers}, 999, tierBase, true},
+		{"tiers without ceilings are skipped", topOnly, 10, "b", true},
+		{"no tier has ceilings", noCeilings, 10, "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, why, ok := pickTier(tt.spec, tierdv1.VolumeIOSampleStatus{IOPS: tt.iops})
+			if got != tt.want || ok != tt.wantOK {
+				t.Errorf("pickTier = %q, %v (%s); want %q, %v", got, ok, why, tt.want, tt.wantOK)
+			}
+		})
+	}
+}
+
+func TestReconcileAdoptsPVCWithoutClass(t *testing.T) {
+	const driver = "disk.csi.azure.com"
+	objects := func(mode tierdv1.VolumeTierPolicyMode, pvDriver string) []client.Object {
+		pvc := &corev1.PersistentVolumeClaim{
+			Namespace: testKey.Namespace, Name: testKey.Name,
+			Spec:   corev1.PersistentVolumeClaimSpec{VolumeName: "pv"},
+			Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
+		}
+		pv := &corev1.PersistentVolume{
+			Name: "pv",
+			Spec: corev1.PersistentVolumeSpec{PersistentVolumeSource: corev1.PersistentVolumeSource{
+				CSI: &corev1.CSIPersistentVolumeSource{Driver: pvDriver},
+			}},
+		}
+		vtp := &tierdv1.VolumeTierPolicy{
+			Namespace: testKey.Namespace, Name: testPolicy,
+			Spec: tierdv1.VolumeTierPolicySpec{
+				Mode: mode,
+				Tiers: []tierdv1.Tier{
+					{VACName: tierBase, Ceilings: &tierdv1.Ceiling{IOPS: new(int64(1000))}},
+					{VACName: tierFast, Ceilings: &tierdv1.Ceiling{IOPS: new(int64(5000))}},
+				},
+				ScaleUp: tierdv1.ScaleUp{UtilizationAbove: new(int32(80))},
+			},
+		}
+		vac := &storagev1.VolumeAttributesClass{Name: tierBase, DriverName: driver}
+		vts := &tierdv1.VolumeTierState{
+			Namespace: testKey.Namespace, Name: testKey.Name,
+			Status: tierdv1.VolumeTierStateStatus{PolicyRef: testPolicy},
+		}
+		// 852 IOPS is 85% of base, over the 80% threshold: fast fits.
+		sample := &tierdv1.VolumeIOSample{
+			Namespace: testKey.Namespace, Name: testKey.Name,
+			Status: tierdv1.VolumeIOSampleStatus{IOPS: 852},
+		}
+		return []client.Object{pvc, pv, vtp, vac, vts, sample}
+	}
+	pvcClass := func(t *testing.T, c client.Client) string {
+		t.Helper()
+		pvc := &corev1.PersistentVolumeClaim{}
+		if err := c.Get(t.Context(), testKey, pvc); err != nil {
+			t.Fatal(err)
+		}
+		return ptr.Deref(pvc.Spec.VolumeAttributesClassName, "")
+	}
+
+	t.Run("act sets the tier that fits the load", func(t *testing.T) {
+		c := reconcileWith(t, objects(tierdv1.VolumeTierPolicyModeAct, driver)...)
+		if got := pvcClass(t, c); got != tierFast {
+			t.Errorf("PVC class = %q, want fast", got)
+		}
+		if st := getState(t, c).Status; st.RecommendedTier != tierFast || st.LastAppliedTier != tierFast {
+			t.Errorf("state = %+v, want fast recommended and applied", st)
+		}
+	})
+
+	t.Run("recommend only recommends", func(t *testing.T) {
+		c := reconcileWith(t, objects(tierdv1.VolumeTierPolicyModeRecommend, driver)...)
+		if got := pvcClass(t, c); got != "" {
+			t.Errorf("PVC class = %q, want unset", got)
+		}
+		if st := getState(t, c).Status; st.RecommendedTier != tierFast {
+			t.Errorf("RecommendedTier = %q, want fast", st.RecommendedTier)
+		}
+	})
+
+	t.Run("another driver's volume is not adopted", func(t *testing.T) {
+		c := reconcileWith(t, objects(tierdv1.VolumeTierPolicyModeAct, "file.csi.azure.com")...)
+		if got := pvcClass(t, c); got != "" {
+			t.Errorf("PVC class = %q, want unset", got)
+		}
+		cond := meta.FindStatusCondition(getState(t, c).Status.Conditions, ConditionVTSManaged)
+		if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != ConditionReasonCannotAdopt {
+			t.Errorf("Managed = %+v, want False/%s", cond, ConditionReasonCannotAdopt)
+		}
+	})
+}
+
+func TestReconcileTierNotInPolicy(t *testing.T) {
+	pvc := &corev1.PersistentVolumeClaim{
+		Namespace: testKey.Namespace, Name: testKey.Name,
+		Spec: corev1.PersistentVolumeClaimSpec{VolumeAttributesClassName: new("other")},
+		Status: corev1.PersistentVolumeClaimStatus{
+			Phase: corev1.ClaimBound, CurrentVolumeAttributesClassName: new("other"),
+		},
+	}
+	sample := &tierdv1.VolumeIOSample{Namespace: testKey.Namespace, Name: testKey.Name}
+	vtp := &tierdv1.VolumeTierPolicy{
+		Namespace: testKey.Namespace, Name: testPolicy,
+		Spec: tierdv1.VolumeTierPolicySpec{Tiers: []tierdv1.Tier{{VACName: tierBase}, {VACName: tierFast}}},
+	}
+	vts := &tierdv1.VolumeTierState{
+		Namespace: testKey.Namespace, Name: testKey.Name,
+		Status: tierdv1.VolumeTierStateStatus{PolicyRef: testPolicy},
+	}
+	c := reconcileWith(t, pvc, sample, vtp, vts)
+	cond := meta.FindStatusCondition(getState(t, c).Status.Conditions, ConditionVTSManaged)
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != ConditionReasonTierNotInPolicy {
+		t.Errorf("Managed = %+v, want False/%s", cond, ConditionReasonTierNotInPolicy)
 	}
 }

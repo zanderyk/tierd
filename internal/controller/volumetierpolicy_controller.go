@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -31,6 +32,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -41,10 +43,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	tierdv1 "github.com/zanderyk/tierd/api/v1"
-)
-
-const (
-	SkipVolumeTierStateAnnotation = "tierd.zanderyk.github.io/skip-volume-tier"
 )
 
 type VTPConditionType string
@@ -98,6 +96,8 @@ func (e *tierError) Unwrap() error { return e.err }
 // +kubebuilder:rbac:groups=tierd.zanderyk.github.io,resources=volumetierpolicies/finalizers,verbs=update
 // +kubebuilder:rbac:groups=storage.k8s.io,resources=volumeattributesclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch
 
 // Reconcile validates a VolumeTierPolicy's tiers, reports the result on the
 // Ready condition, and ensures a VolumeTierState exists for each matched PVC.
@@ -149,7 +149,8 @@ func (r *VolumeTierPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	base := vtp.DeepCopy()
 
-	if err := r.validateTiers(ctx, vtp.Spec.Tiers); err != nil {
+	driver, err := r.validateTiers(ctx, vtp.Spec.Tiers)
+	if err != nil {
 		var te *tierError
 		if !errors.As(err, &te) {
 			logger.Error(err, "Failed to validate VolumeTierPolicy tiers")
@@ -177,18 +178,30 @@ func (r *VolumeTierPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, fmt.Errorf("unable to list PVCs: %w", err)
 	}
 
-	selectors, err := r.namespaceSelectors(ctx, vtp, selector)
+	policies, err := r.namespacePolicies(ctx, vtp, policyMatch{selector: selector, driver: driver})
 	if err != nil {
 		logger.Error(err, "Failed to list VolumeTierPolicies", "namespace", vtp.GetNamespace())
 		return ctrl.Result{}, err
 	}
 
 	matched := make([]string, 0, len(matchedPVCs.Items))
-	var conflicts []string
+	var conflicts, skipped []string
 	for _, pvc := range matchedPVCs.Items {
 		if pvc.GetAnnotations()[SkipVolumeTierStateAnnotation] == "true" {
 			continue
 		}
+
+		// A policy's tiers only apply to PVCs of the tiers' CSI driver.
+		pvcDriver, err := r.pvcDriver(ctx, &pvc)
+		if err != nil {
+			logger.Error(err, "Failed to get PVC driver", "pvc", pvc.Name)
+			return ctrl.Result{}, err
+		}
+		if pvcDriver != driver {
+			skipped = append(skipped, fmt.Sprintf("%s (%s)", pvc.Name, cmp.Or(pvcDriver, "driver unknown")))
+			continue
+		}
+
 		state, err := r.ensureVolumeTierState(ctx, &pvc)
 		if err != nil {
 			logger.Error(err, "Failed to ensure VolumeTierState", "pvc", pvc.Name)
@@ -197,7 +210,7 @@ func (r *VolumeTierPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 		// A PVC matched by more than one policy is left unmanaged.
 		ref := vtp.Name
-		if owners := matchingPolicies(selectors, pvc.Labels); len(owners) > 1 {
+		if owners := matchingPolicies(policies, pvc.Labels, pvcDriver); len(owners) > 1 {
 			ref = ""
 			conflicts = append(conflicts, fmt.Sprintf("%s (%s)", pvc.Name, strings.Join(owners, ", ")))
 		}
@@ -227,7 +240,11 @@ func (r *VolumeTierPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	setConflict(vtp, conflicts)
 
 	vtp.Status.PVCs = matched
-	setReady(vtp, metav1.ConditionTrue, VTPConditionReasonReady, "All tier VolumeAttributesClasses exist and share one driver")
+	msg := "All tier VolumeAttributesClasses exist and use driver " + driver
+	if len(skipped) > 0 {
+		msg += ". Skipped PVCs of other drivers: " + strings.Join(skipped, ", ")
+	}
+	setReady(vtp, metav1.ConditionTrue, VTPConditionReasonReady, msg)
 
 	if err := r.patchStatus(ctx, vtp, base); err != nil {
 		return ctrl.Result{}, err
@@ -278,40 +295,86 @@ func (r *VolumeTierPolicyReconciler) setPolicyRef(ctx context.Context, state *ti
 	return nil
 }
 
-// namespaceSelectors returns the parsed selector of every policy in vtp's
-// namespace, keyed by policy name. Policies with an invalid selector are
-// skipped.
-func (r *VolumeTierPolicyReconciler) namespaceSelectors(
+// policyMatch is what decides whether a policy matches a PVC: its label
+// selector and its tiers' CSI driver.
+type policyMatch struct {
+	selector labels.Selector
+	driver   string
+}
+
+// namespacePolicies returns the policyMatch of every policy in vtp's
+// namespace, keyed by policy name. Policies with an invalid selector or a
+// missing first tier VAC are skipped; they match no PVCs.
+func (r *VolumeTierPolicyReconciler) namespacePolicies(
 	ctx context.Context,
 	vtp *tierdv1.VolumeTierPolicy,
-	own labels.Selector,
-) (map[string]labels.Selector, error) {
+	own policyMatch,
+) (map[string]policyMatch, error) {
 	policies := &tierdv1.VolumeTierPolicyList{}
 	if err := r.List(ctx, policies, client.InNamespace(vtp.Namespace)); err != nil {
 		return nil, fmt.Errorf("cannot list VolumeTierPolicies: %w", err)
 	}
-	selectors := make(map[string]labels.Selector, len(policies.Items))
+	matches := make(map[string]policyMatch, len(policies.Items))
 	for _, p := range policies.Items {
-		if s, err := metav1.LabelSelectorAsSelector(&p.Spec.Selector); err == nil {
-			selectors[p.Name] = s
+		s, err := metav1.LabelSelectorAsSelector(&p.Spec.Selector)
+		if err != nil || len(p.Spec.Tiers) == 0 {
+			continue
 		}
+		vac := &storagev1.VolumeAttributesClass{}
+		if err := r.Get(ctx, client.ObjectKey{Name: p.Spec.Tiers[0].VACName}, vac); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return nil, fmt.Errorf("cannot get VolumeAttributesClass %s: %w", p.Spec.Tiers[0].VACName, err)
+		}
+		matches[p.Name] = policyMatch{selector: s, driver: vac.DriverName}
 	}
 	// The cache may not have this policy's latest selector yet.
-	selectors[vtp.Name] = own
-	return selectors, nil
+	matches[vtp.Name] = own
+	return matches, nil
 }
 
-// matchingPolicies returns the sorted names of the policies whose selector
-// matches the given PVC labels.
-func matchingPolicies(selectors map[string]labels.Selector, pvcLabels map[string]string) []string {
+// matchingPolicies returns the sorted names of the policies that match a PVC
+// with the given labels and CSI driver.
+func matchingPolicies(policies map[string]policyMatch, pvcLabels map[string]string, driver string) []string {
 	var owners []string
-	for name, s := range selectors {
-		if s.Matches(labels.Set(pvcLabels)) {
+	for name, p := range policies {
+		if p.driver == driver && p.selector.Matches(labels.Set(pvcLabels)) {
 			owners = append(owners, name)
 		}
 	}
 	slices.Sort(owners)
 	return owners
+}
+
+// pvcDriver returns the CSI driver of pvc: its StorageClass's provisioner,
+// or, without a StorageClass, its bound PV's CSI driver. It returns "" while
+// neither is known.
+func (r *VolumeTierPolicyReconciler) pvcDriver(ctx context.Context, pvc *corev1.PersistentVolumeClaim) (string, error) {
+	if name := ptr.Deref(pvc.Spec.StorageClassName, ""); name != "" {
+		sc := &storagev1.StorageClass{}
+		err := r.Get(ctx, client.ObjectKey{Name: name}, sc)
+		if err == nil {
+			return sc.Provisioner, nil
+		}
+		if !apierrors.IsNotFound(err) {
+			return "", fmt.Errorf("cannot get StorageClass %s: %w", name, err)
+		}
+	}
+	if pvc.Spec.VolumeName == "" {
+		return "", nil
+	}
+	pv := &corev1.PersistentVolume{}
+	if err := r.Get(ctx, client.ObjectKey{Name: pvc.Spec.VolumeName}, pv); err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("cannot get PersistentVolume %s: %w", pvc.Spec.VolumeName, err)
+	}
+	if pv.Spec.CSI == nil {
+		return "", nil
+	}
+	return pv.Spec.CSI.Driver, nil
 }
 
 func setConflict(vtp *tierdv1.VolumeTierPolicy, conflicts []string) {
@@ -352,19 +415,21 @@ func (r *VolumeTierPolicyReconciler) patchStatus(ctx context.Context, vtp, base 
 }
 
 // validateTiers checks the tiers' spec first and, only if that passes, the
-// VolumeAttributesClasses they name. Problems the user must fix are returned
-// as *tierError; any other error is an API failure and should be retried.
-func (r *VolumeTierPolicyReconciler) validateTiers(ctx context.Context, tiers []tierdv1.Tier) error {
+// VolumeAttributesClasses they name, and returns the tiers' CSI driver.
+// Problems the user must fix are returned as *tierError; any other error is
+// an API failure and should be retried.
+func (r *VolumeTierPolicyReconciler) validateTiers(ctx context.Context, tiers []tierdv1.Tier) (string, error) {
 	if err := validateTierSpec(tiers); err != nil {
-		return &tierError{reason: VTPConditionReasonInvalidTiers, err: err}
+		return "", &tierError{reason: VTPConditionReasonInvalidTiers, err: err}
 	}
 	return r.validateVolumeAttributesClasses(ctx, tiers)
 }
 
 // validateVolumeAttributesClasses checks that every tier's VAC exists and that
-// they all use the same CSI driver. Reads come from the informer cache; a VAC
-// created after a NotFound is picked up through the VAC watch.
-func (r *VolumeTierPolicyReconciler) validateVolumeAttributesClasses(ctx context.Context, tiers []tierdv1.Tier) error {
+// they all use the same CSI driver, and returns that driver. Reads come from
+// the informer cache; a VAC created after a NotFound is picked up through the
+// VAC watch.
+func (r *VolumeTierPolicyReconciler) validateVolumeAttributesClasses(ctx context.Context, tiers []tierdv1.Tier) (string, error) {
 	var missing []string
 	drivers := make(map[string][]string) // driverName -> tier names
 	for _, tier := range tiers {
@@ -374,13 +439,13 @@ func (r *VolumeTierPolicyReconciler) validateVolumeAttributesClasses(ctx context
 				missing = append(missing, tier.VACName)
 				continue
 			}
-			return fmt.Errorf("cannot get VolumeAttributesClass %s: %w", tier.VACName, err)
+			return "", fmt.Errorf("cannot get VolumeAttributesClass %s: %w", tier.VACName, err)
 		}
 		drivers[vac.DriverName] = append(drivers[vac.DriverName], tier.VACName)
 	}
 
 	if len(missing) > 0 {
-		return &tierError{
+		return "", &tierError{
 			reason: VTPConditionReasonVolumeAttributesClassNotFound,
 			err:    fmt.Errorf("VolumeAttributesClasses not found: %s", strings.Join(missing, ", ")),
 		}
@@ -391,12 +456,15 @@ func (r *VolumeTierPolicyReconciler) validateVolumeAttributesClasses(ctx context
 			parts = append(parts, fmt.Sprintf("%s (%s)", driver, strings.Join(names, ", ")))
 		}
 		slices.Sort(parts)
-		return &tierError{
+		return "", &tierError{
 			reason: VTPConditionReasonDriverMismatch,
 			err:    fmt.Errorf("tier VolumeAttributesClasses use different drivers: %s", strings.Join(parts, "; ")),
 		}
 	}
-	return nil
+	for driver := range drivers {
+		return driver, nil
+	}
+	return "", nil
 }
 
 // validateTierSpec checks that tiers form a usable ladder: at least two

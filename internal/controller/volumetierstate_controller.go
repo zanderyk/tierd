@@ -58,6 +58,12 @@ const (
 	ConditionReasonInvalidPVC     = "InvalidPVC"
 	ConditionReasonMissingPolicy  = "MissingPolicy"
 	ConditionReasonAwaitingSample = "AwaitingSample"
+	// ConditionReasonTierNotInPolicy: the PVC's VolumeAttributesClass isn't
+	// one of the policy's tiers.
+	ConditionReasonTierNotInPolicy = "TierNotInPolicy"
+	// ConditionReasonCannotAdopt: the PVC has no VolumeAttributesClass and
+	// tierd can't pick a starting tier for it.
+	ConditionReasonCannotAdopt    = "CannotAdopt"
 	ConditionReasonManualOverride = "VolumeAttributesClassManualOverride"
 )
 
@@ -76,6 +82,7 @@ type VolumeTierStateReconciler struct {
 // +kubebuilder:rbac:groups=tierd.zanderyk.github.io,resources=volumetierstates/finalizers,verbs=update
 // +kubebuilder:rbac:groups=tierd.zanderyk.github.io,resources=volumeiosamples,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=patch
+// +kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=storage.k8s.io,resources=volumeattributesclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
@@ -165,8 +172,13 @@ func (r *VolumeTierStateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
-	scaleDirection, why := r.Evaluate(vtp, vts.Status.CurrentTier, vioSample)
-	requeue := recommend(&vts.Status, vtp.Spec, scaleDirection, why, time.Now())
+	requeue, managed, err := r.recommendTier(ctx, vtp, vts, pvc, vioSample)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !managed {
+		return ctrl.Result{}, r.patchStatus(ctx, vts, base)
+	}
 
 	if shouldAct(vtp, vts, pvc) {
 		pvcBase := pvc.DeepCopy()
@@ -181,7 +193,11 @@ func (r *VolumeTierStateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		// Start the stopwatch fresh on the new tier
 		vts.Status.PendingDirection = tierdv1.ScaleDirectionNone
 		vts.Status.PendingSince = nil
-		r.Recorder.Eventf(pvc, vts, corev1.EventTypeNormal, "TierChanged", "ChangeTier", "Changed tier from %s to %s (policy: %s): %s", vts.Status.CurrentTier, vts.Status.RecommendedTier, vtp.GetName(), vts.Status.Reason)
+		if vts.Status.CurrentTier == "" {
+			r.Recorder.Eventf(pvc, vts, corev1.EventTypeNormal, "TierChanged", "AdoptTier", "Set tier %s (policy: %s): %s", vts.Status.RecommendedTier, vtp.GetName(), vts.Status.Reason)
+		} else {
+			r.Recorder.Eventf(pvc, vts, corev1.EventTypeNormal, "TierChanged", "ChangeTier", "Changed tier from %s to %s (policy: %s): %s", vts.Status.CurrentTier, vts.Status.RecommendedTier, vtp.GetName(), vts.Status.Reason)
+		}
 	}
 
 	if err := r.checkModify(ctx, vtp, vts, pvc); err != nil {
@@ -195,6 +211,68 @@ func (r *VolumeTierStateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	return ctrl.Result{RequeueAfter: requeue}, nil
+}
+
+// recommendTier sets the state's recommended tier. A PVC with no
+// VolumeAttributesClass is adopted onto the tier that fits its load; one on
+// a tier is evaluated against the policy's triggers. managed is false, with
+// the Managed condition set, when the PVC can't be tiered.
+func (r *VolumeTierStateReconciler) recommendTier(
+	ctx context.Context,
+	vtp *tierdv1.VolumeTierPolicy,
+	vts *tierdv1.VolumeTierState,
+	pvc *corev1.PersistentVolumeClaim,
+	sample *tierdv1.VolumeIOSample,
+) (requeue time.Duration, managed bool, err error) {
+	if vts.Status.CurrentTier != "" {
+		if tierIndex(vtp.Spec, vts.Status.CurrentTier) < 0 {
+			setManaged(vts, metav1.ConditionFalse, ConditionReasonTierNotInPolicy,
+				fmt.Sprintf("VolumeAttributesClass %s is not one of the policy's tiers", vts.Status.CurrentTier))
+			return 0, false, nil
+		}
+		direction, why := r.Evaluate(vtp, vts.Status.CurrentTier, sample)
+		return recommend(&vts.Status, vtp.Spec, direction, why, time.Now()), true, nil
+	}
+
+	// Adopt: only onto classes the PVC's own driver can apply.
+	msg, err := r.driverMismatch(ctx, vtp, pvc)
+	if err != nil {
+		return 0, false, err
+	}
+	if msg == "" {
+		tier, why, ok := pickTier(vtp.Spec, sample.Status)
+		if ok {
+			vts.Status.RecommendedTier, vts.Status.Reason = tier, why
+			return 0, true, nil
+		}
+		msg = "No tier declares ceilings, so the starting tier can't be chosen from the load; set the PVC's VolumeAttributesClass to one of the policy's tiers"
+	}
+	setManaged(vts, metav1.ConditionFalse, ConditionReasonCannotAdopt, msg)
+	return 0, false, nil
+}
+
+// driverMismatch explains why the policy's tiers can't apply to pvc's
+// volume, or returns "" if they can. The policy's tiers share one driver.
+func (r *VolumeTierStateReconciler) driverMismatch(ctx context.Context, vtp *tierdv1.VolumeTierPolicy, pvc *corev1.PersistentVolumeClaim) (string, error) {
+	pv := &corev1.PersistentVolume{}
+	if err := r.Get(ctx, client.ObjectKey{Name: pvc.Spec.VolumeName}, pv); err != nil {
+		return "", fmt.Errorf("cannot get PersistentVolume %s: %w", pvc.Spec.VolumeName, err)
+	}
+	if pv.Spec.CSI == nil {
+		return fmt.Sprintf("PersistentVolume %s is not a CSI volume", pv.Name), nil
+	}
+	vacName := vtp.Spec.Tiers[0].VACName
+	vac := &storagev1.VolumeAttributesClass{}
+	if err := r.Get(ctx, client.ObjectKey{Name: vacName}, vac); err != nil {
+		if apierrors.IsNotFound(err) {
+			return fmt.Sprintf("VolumeAttributesClass %s not found", vacName), nil
+		}
+		return "", err
+	}
+	if vac.DriverName != pv.Spec.CSI.Driver {
+		return fmt.Sprintf("PVC uses driver %s but the policy's tiers are for %s", pv.Spec.CSI.Driver, vac.DriverName), nil
+	}
+	return "", nil
 }
 
 // checkModify sets the Modifying condition from the PVC's modify status. On
@@ -232,8 +310,11 @@ func (r *VolumeTierStateReconciler) checkModify(ctx context.Context, vtp *tierdv
 		)
 
 		// Rollback VolumeAttributesClass in the event the volume can't be migrated.
-		// Don't undo a tier the user set by hand, even if it failed.
+		// Don't undo a tier the user set by hand, even if it failed. An
+		// adopted PVC (no tier before) can't be rolled back: Kubernetes
+		// won't unset volumeAttributesClassName.
 		if vtp.Spec.Mode == tierdv1.VolumeTierPolicyModeAct &&
+			vts.Status.CurrentTier != "" &&
 			!meta.IsStatusConditionTrue(vts.Status.Conditions, ConditionVTSManualOverride) &&
 			ptr.Deref(pvc.Spec.VolumeAttributesClassName, "") != vts.Status.CurrentTier {
 			pvcBase := pvc.DeepCopy()
@@ -271,8 +352,12 @@ func (r *VolumeTierStateReconciler) syncOverride(ctx context.Context,
 	case annotated:
 		setCondition(vts, ConditionVTSManualOverride, metav1.ConditionTrue, "Annotated", paused)
 	case wasOverridden:
-		// The user removed the annotation: take the current tier as tierd's own.
+		// The user removed the annotation: take the current tier as tierd's own
+		// and restart the `for` window, so load seen while paused can't act
+		// the moment tierd resumes.
 		vts.Status.LastAppliedTier = specVAC
+		vts.Status.PendingDirection = tierdv1.ScaleDirectionNone
+		vts.Status.PendingSince = nil
 		setCondition(vts, ConditionVTSManualOverride, metav1.ConditionFalse, "Resumed", "")
 	case changedByHand(vts.Status, specVAC):
 		pvcBase := pvc.DeepCopy()
