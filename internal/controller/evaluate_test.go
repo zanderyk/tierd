@@ -319,6 +319,7 @@ func TestSyncOverride(t *testing.T) {
 		name          string
 		specVAC       string
 		annotated     bool
+		applied       string // the PVC's applied-tier annotation
 		status        tierdv1.VolumeTierStateStatus
 		wantOverride  bool
 		wantAnnotated bool
@@ -333,6 +334,18 @@ func TestSyncOverride(t *testing.T) {
 			name:    "tier changed by hand",
 			specVAC: tierBase, status: tierdv1.VolumeTierStateStatus{LastAppliedTier: tierFast},
 			wantOverride: true, wantAnnotated: true, wantLast: tierFast,
+		},
+		{
+			// The PVC patch re-triggers reconcile before the state's cache
+			// has tierd's LastAppliedTier.
+			name:    "tierd's own change read with a stale state",
+			specVAC: tierFast, applied: tierFast, status: tierdv1.VolumeTierStateStatus{CurrentTier: tierBase, LastAppliedTier: tierBase},
+			wantLast: tierBase,
+		},
+		{
+			name:    "tier changed by hand after tierd set it",
+			specVAC: tierBase, applied: tierFast, status: tierdv1.VolumeTierStateStatus{CurrentTier: tierFast},
+			wantOverride: true, wantAnnotated: true,
 		},
 		{
 			name:    "tier changed by hand before tierd ever acted",
@@ -360,8 +373,12 @@ func TestSyncOverride(t *testing.T) {
 				Name: "data", Namespace: "default",
 				Spec: corev1.PersistentVolumeClaimSpec{VolumeAttributesClassName: new(tt.specVAC)},
 			}
+			pvc.Annotations = map[string]string{}
 			if tt.annotated {
-				pvc.Annotations = map[string]string{ManualOverrideAnnotation: "true"}
+				pvc.Annotations[ManualOverrideAnnotation] = "true"
+			}
+			if tt.applied != "" {
+				pvc.Annotations[AppliedTierAnnotation] = tt.applied
 			}
 			c := fake.NewClientBuilder().WithObjects(pvc).Build()
 			r := &VolumeTierStateReconciler{Client: c, Recorder: events.NewFakeRecorder(10)}
@@ -383,6 +400,10 @@ func TestSyncOverride(t *testing.T) {
 			}
 			if vts.Status.LastAppliedTier != tt.wantLast {
 				t.Errorf("LastAppliedTier = %q, want %q", vts.Status.LastAppliedTier, tt.wantLast)
+			}
+			if resumed := meta.FindStatusCondition(vts.Status.Conditions, ConditionVTSManualOverride).Reason == "Resumed"; resumed &&
+				stored.Annotations[AppliedTierAnnotation] != tt.specVAC {
+				t.Errorf("applied-tier annotation = %q after resume, want %q", stored.Annotations[AppliedTierAnnotation], tt.specVAC)
 			}
 			if tt.status.PendingSince != nil && (vts.Status.PendingSince != nil || vts.Status.PendingDirection != tierdv1.ScaleDirectionNone) {
 				t.Errorf("pending = %s since %v, want cleared on resume", vts.Status.PendingDirection, vts.Status.PendingSince)

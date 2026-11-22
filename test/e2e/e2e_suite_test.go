@@ -32,18 +32,23 @@ import (
 )
 
 var (
-	// managerImage is the manager image to be built and loaded for testing.
-	managerImage = "example.com/tierd:v0.0.1"
+	// managerImage is the manager and agent image built and loaded into kind.
+	managerImage = "tierd.local/tierd:e2e"
 	// shouldCleanupCertManager tracks whether CertManager was installed by this suite.
 	shouldCleanupCertManager = false
 )
 
-// TestE2E runs the e2e test suite to validate the solution in an isolated environment.
-// The default setup requires Kind and CertManager.
-//
-// To enable kubectl kuberc (use custom kubectl configurations), set: KUBECTL_KUBERC=true
-// By default, kuberc is disabled to ensure consistent test behavior across different environments.
-// To skip CertManager installation, set: CERT_MANAGER_INSTALL_SKIP=true
+const (
+	agentDaemonSet = "tierd-agent"
+	// hostpathDataDir is where the CSI hostpath driver keeps volumes on the
+	// node. The suite mounts it on a loop device so every e2e volume sits on
+	// one real block device the agent can measure.
+	hostpathDataDir = "/var/lib/csi-hostpath-data"
+)
+
+// TestE2E runs the e2e suite against the kind cluster that `make test-e2e`
+// creates. It deploys the CSI hostpath driver and tierd once, then runs the
+// specs.
 func TestE2E(t *testing.T) {
 	RegisterFailHandler(Fail)
 	_, _ = fmt.Fprintf(GinkgoWriter, "Starting tierd e2e test suite\n")
@@ -56,23 +61,75 @@ var _ = BeforeSuite(func() {
 	_, err := utils.Run(cmd)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the manager image")
 
-	// TODO(user): If you want to change the e2e test vendor from Kind,
-	// ensure the image is built and available, then remove the following block.
 	By("loading the manager image on Kind")
 	err = utils.LoadImageToKindClusterWithName(managerImage)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the manager image into Kind")
 
 	configureKubectlKubeRC()
 	setupCertManager()
+	setupHostpathDriver()
+	deployTierd()
 })
 
 var _ = AfterSuite(func() {
 	teardownCertManager()
 })
 
-// Disable kubectl kuberc by default for test isolation.
-// This prevents local kubectl configurations from affecting test behavior.
-// To enable kuberc, set: KUBECTL_KUBERC=true
+// setupHostpathDriver mounts the hostpath data dir on a loop device in the
+// kind node, then deploys the CSI hostpath driver with ModifyVolume enabled.
+func setupHostpathDriver() {
+	By("mounting the hostpath data dir on a loop device")
+	// mount -o loop sets autoclear, so the loop device is released when the
+	// kind node goes away.
+	script := fmt.Sprintf(`set -e
+mountpoint -q %[1]s && exit 0
+truncate -s 2G /var/lib/tierd-e2e.img
+mkfs.ext4 -q -F /var/lib/tierd-e2e.img
+mkdir -p %[1]s
+mount -o loop /var/lib/tierd-e2e.img %[1]s`, hostpathDataDir)
+	cmd := exec.Command("docker", "exec", utils.KindNode(), "sh", "-c", script)
+	_, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to mount the hostpath data dir")
+
+	By("deploying the CSI hostpath driver")
+	cmd = exec.Command("kubectl", "apply", "-f", "test/e2e/testdata/csi-hostpath.yaml")
+	_, err = utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to deploy the CSI hostpath driver")
+	cmd = exec.Command("kubectl", "rollout", "status", "statefulset/csi-hostpathplugin",
+		"-n", "csi-hostpath", "--timeout=5m")
+	_, err = utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "CSI hostpath driver did not become ready")
+}
+
+// deployTierd installs the CRDs and deploys the manager and agent. The agent
+// samples every second and publishes every second over a 3s window so the
+// specs' `for` windows can be short.
+func deployTierd() {
+	By("installing CRDs")
+	cmd := exec.Command("make", "install")
+	_, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
+
+	By("deploying the controller-manager and agent")
+	cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", managerImage))
+	_, err = utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to deploy tierd")
+
+	By("speeding up the agent")
+	cmd = exec.Command("kubectl", "patch", "daemonset", agentDaemonSet, "-n", namespace, "--type=json", "-p",
+		`[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--sample-interval=1s"},
+		  {"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--publish-interval=1s"},
+		  {"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--window=3s"}]`)
+	_, err = utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to patch the agent")
+
+	for _, workload := range []string{"daemonset/" + agentDaemonSet, "deployment/tierd-controller-manager"} {
+		cmd = exec.Command("kubectl", "rollout", "status", workload, "-n", namespace, "--timeout=5m")
+		_, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "%s did not become ready", workload)
+	}
+}
+
 func configureKubectlKubeRC() {
 	if os.Getenv("KUBECTL_KUBERC") != "true" {
 		By("disabling kubectl kuberc for test isolation")

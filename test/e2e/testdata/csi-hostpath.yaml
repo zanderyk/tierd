@@ -1,0 +1,154 @@
+# CSI hostpath driver for the e2e suite, trimmed from
+# kubernetes-csi/csi-driver-host-path v1.19.0 deploy/kubernetes-1.36: no
+# attacher, snapshotter or snapshot CRDs, and ControllerModifyVolume enabled
+# so VolumeAttributesClass changes succeed. Volumes are directories under
+# /var/lib/csi-hostpath-data on the node, which the suite mounts on a loop
+# device so the agent sees one block device with real counters.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: csi-hostpath
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+---
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: hostpath.csi.k8s.io
+spec:
+  attachRequired: false
+  volumeLifecycleModes: [Persistent]
+  podInfoOnMount: true
+  fsGroupPolicy: File
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: csi-hostpathplugin-sa
+  namespace: csi-hostpath
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: csi-hostpath-runner
+rules:
+- apiGroups: [""]
+  resources: [persistentvolumes]
+  verbs: [get, list, watch, create, patch, delete]
+- apiGroups: [""]
+  resources: [persistentvolumeclaims]
+  verbs: [get, list, watch, update]
+- apiGroups: [""]
+  resources: [persistentvolumeclaims/status]
+  verbs: [patch]
+- apiGroups: [""]
+  resources: [pods, nodes]
+  verbs: [get, list, watch]
+- apiGroups: [""]
+  resources: [events]
+  verbs: [list, watch, create, update, patch]
+- apiGroups: [storage.k8s.io]
+  resources: [storageclasses, csinodes, volumeattachments, volumeattributesclasses]
+  verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: csi-hostpath-runner
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: csi-hostpath-runner
+subjects:
+- kind: ServiceAccount
+  name: csi-hostpathplugin-sa
+  namespace: csi-hostpath
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: csi-hostpathplugin
+  namespace: csi-hostpath
+spec:
+  serviceName: csi-hostpathplugin
+  # The hostpath driver only works with everything on one node.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: csi-hostpathplugin
+  template:
+    metadata:
+      labels:
+        app: csi-hostpathplugin
+    spec:
+      serviceAccountName: csi-hostpathplugin-sa
+      containers:
+      - name: hostpath
+        image: registry.k8s.io/sig-storage/hostpathplugin:v1.18.0
+        args:
+        - --drivername=hostpath.csi.k8s.io
+        - --v=5
+        - --endpoint=$(CSI_ENDPOINT)
+        - --nodeid=$(KUBE_NODE_NAME)
+        - --enable-controller-modify-volume=true
+        # Only "tier" may change, so a VAC with any other parameter is
+        # rejected as Infeasible.
+        - --accepted-mutable-parameter-names=tier
+        env:
+        - name: CSI_ENDPOINT
+          value: unix:///csi/csi.sock
+        - name: KUBE_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - {name: socket-dir, mountPath: /csi}
+        - {name: mountpoint-dir, mountPath: /var/lib/kubelet/pods, mountPropagation: Bidirectional}
+        - {name: plugins-dir, mountPath: /var/lib/kubelet/plugins, mountPropagation: Bidirectional}
+        - {name: csi-data-dir, mountPath: /csi-data-dir}
+        - {name: dev-dir, mountPath: /dev}
+      - name: node-driver-registrar
+        image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.18.0
+        args:
+        - --v=5
+        - --csi-address=/csi/csi.sock
+        - --kubelet-registration-path=/var/lib/kubelet/plugins/csi-hostpath/csi.sock
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - {name: socket-dir, mountPath: /csi}
+        - {name: registration-dir, mountPath: /registration}
+      - name: csi-provisioner
+        image: registry.k8s.io/sig-storage/csi-provisioner:v6.4.0
+        args:
+        - -v=5
+        - --csi-address=/csi/csi.sock
+        - --feature-gates=Topology=true
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - {name: socket-dir, mountPath: /csi}
+      - name: csi-resizer
+        image: registry.k8s.io/sig-storage/csi-resizer:v2.3.0
+        args:
+        - -v=5
+        - -csi-address=/csi/csi.sock
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - {name: socket-dir, mountPath: /csi}
+      volumes:
+      - name: socket-dir
+        hostPath: {path: /var/lib/kubelet/plugins/csi-hostpath, type: DirectoryOrCreate}
+      - name: mountpoint-dir
+        hostPath: {path: /var/lib/kubelet/pods, type: DirectoryOrCreate}
+      - name: registration-dir
+        hostPath: {path: /var/lib/kubelet/plugins_registry, type: Directory}
+      - name: plugins-dir
+        hostPath: {path: /var/lib/kubelet/plugins, type: Directory}
+      - name: csi-data-dir
+        hostPath: {path: /var/lib/csi-hostpath-data/, type: DirectoryOrCreate}
+      - name: dev-dir
+        hostPath: {path: /dev, type: Directory}

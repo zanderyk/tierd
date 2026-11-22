@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -182,7 +183,7 @@ func (r *VolumeTierStateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 	if shouldAct(vtp, vts, pvc) {
 		pvcBase := pvc.DeepCopy()
-		pvc.Spec.VolumeAttributesClassName = new(vts.Status.RecommendedTier)
+		setTier(pvc, vts.Status.RecommendedTier)
 		if err := r.Patch(ctx, pvc, client.MergeFrom(pvcBase)); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -318,7 +319,7 @@ func (r *VolumeTierStateReconciler) checkModify(ctx context.Context, vtp *tierdv
 			!meta.IsStatusConditionTrue(vts.Status.Conditions, ConditionVTSManualOverride) &&
 			ptr.Deref(pvc.Spec.VolumeAttributesClassName, "") != vts.Status.CurrentTier {
 			pvcBase := pvc.DeepCopy()
-			pvc.Spec.VolumeAttributesClassName = new(vts.Status.CurrentTier)
+			setTier(pvc, vts.Status.CurrentTier)
 			if err := r.Patch(ctx, pvc, client.MergeFrom(pvcBase)); err != nil {
 				return err
 			}
@@ -355,11 +356,18 @@ func (r *VolumeTierStateReconciler) syncOverride(ctx context.Context,
 		// The user removed the annotation: take the current tier as tierd's own
 		// and restart the `for` window, so load seen while paused can't act
 		// the moment tierd resumes.
+		if pvc.Annotations[AppliedTierAnnotation] != specVAC {
+			pvcBase := pvc.DeepCopy()
+			metav1.SetMetaDataAnnotation(&pvc.ObjectMeta, AppliedTierAnnotation, specVAC)
+			if err := r.Patch(ctx, pvc, client.MergeFrom(pvcBase)); err != nil {
+				return err
+			}
+		}
 		vts.Status.LastAppliedTier = specVAC
 		vts.Status.PendingDirection = tierdv1.ScaleDirectionNone
 		vts.Status.PendingSince = nil
 		setCondition(vts, ConditionVTSManualOverride, metav1.ConditionFalse, "Resumed", "")
-	case changedByHand(vts.Status, specVAC):
+	case changedByHand(pvc, vts.Status, specVAC):
 		pvcBase := pvc.DeepCopy()
 		metav1.SetMetaDataAnnotation(&pvc.ObjectMeta, ManualOverrideAnnotation, "true")
 		if err := r.Patch(ctx, pvc, client.MergeFrom(pvcBase)); err != nil {
@@ -376,12 +384,21 @@ func (r *VolumeTierStateReconciler) syncOverride(ctx context.Context,
 
 // changedByHand is true if the PVC's spec tier is not the one tierd last
 // set, or, if tierd never set one, not the PVC's current tier.
-func changedByHand(st tierdv1.VolumeTierStateStatus, specVAC string) bool {
-	want := st.LastAppliedTier
-	if want == "" {
-		want = st.CurrentTier
-	}
+//
+// What tierd set is read from the PVC's applied-tier annotation, written in
+// the same patch as the tier. The state's LastAppliedTier can't be trusted
+// here: the PVC patch triggers the next reconcile, which may still read the
+// state from a cache without it. LastAppliedTier is only a fallback for PVCs
+// tierd changed before the annotation existed.
+func changedByHand(pvc *corev1.PersistentVolumeClaim, st tierdv1.VolumeTierStateStatus, specVAC string) bool {
+	want := cmp.Or(pvc.Annotations[AppliedTierAnnotation], st.LastAppliedTier, st.CurrentTier)
 	return want != "" && specVAC != want
+}
+
+// setTier sets the PVC's tier and records it as tierd's own change.
+func setTier(pvc *corev1.PersistentVolumeClaim, tier string) {
+	pvc.Spec.VolumeAttributesClassName = new(tier)
+	metav1.SetMetaDataAnnotation(&pvc.ObjectMeta, AppliedTierAnnotation, tier)
 }
 
 const (

@@ -6,7 +6,7 @@ resources:
 - metrics_service.yaml
 images:
 - name: controller
-  newName: example.azurecr.io/tierd
-  newTag: dev-1795361738
+  newName: tierd.local/tierd
+  newTag: e2e
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization

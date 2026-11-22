@@ -133,13 +133,22 @@ func IsCertManagerCRDsInstalled() bool {
 	return false
 }
 
+// kindCluster is the kind cluster name, from $KIND_CLUSTER.
+func kindCluster() string {
+	if v, ok := os.LookupEnv("KIND_CLUSTER"); ok {
+		return v
+	}
+	return defaultKindCluster
+}
+
+// KindNode is the docker container of the kind cluster's single node.
+func KindNode() string {
+	return kindCluster() + "-control-plane"
+}
+
 // LoadImageToKindClusterWithName loads a local docker image to the kind cluster
 func LoadImageToKindClusterWithName(name string) error {
-	cluster := defaultKindCluster
-	if v, ok := os.LookupEnv("KIND_CLUSTER"); ok {
-		cluster = v
-	}
-	kindOptions := []string{"load", "docker-image", name, "--name", cluster}
+	kindOptions := []string{"load", "docker-image", name, "--name", kindCluster()}
 	kindBinary := defaultKindBinary
 	if v, ok := os.LookupEnv("KIND"); ok {
 		kindBinary = v

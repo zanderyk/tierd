@@ -74,12 +74,36 @@ func TestDiscoverVolumes(t *testing.T) {
 	}
 }
 
+func TestCifsShare(t *testing.T) {
+	stats := map[string]procfs.Counters{"//srv/share": {Reads: 7}}
+	for _, tc := range []struct {
+		source string
+		ok     bool
+	}{
+		{"//srv/share", true},
+		{"//srv/share/pvc-1", true},
+		{"//srv/share/a/b", true},
+		{"//srv/other", false},
+		{"//srv/sharex", false},
+		{"//srv", false},
+		{"share", false},
+	} {
+		c, ok := cifsShare(stats, tc.source)
+		if ok != tc.ok || (ok && c.Reads != 7) {
+			t.Errorf("cifsShare(%q) = %+v, %v; want ok %v", tc.source, c, ok, tc.ok)
+		}
+	}
+}
+
 func TestPodCgroupPath(t *testing.T) {
 	root := t.TempDir()
 	burstable := filepath.Join(root, "kubepods.slice", "kubepods-burstable.slice",
 		"kubepods-burstable-pod3b7e2a10_6c1d_4a7e_9f0a_1d2c3b4a5e6f.slice")
 	guaranteed := filepath.Join(root, "kubepods", "pod11111111-2222-3333-4444-555555555555")
-	for _, dir := range []string{burstable, guaranteed} {
+	// kind runs the kubelet with --cgroup-root=/kubelet.
+	kindPod := filepath.Join(root, "kubelet.slice", "kubelet-kubepods.slice", "kubelet-kubepods-besteffort.slice",
+		"kubelet-kubepods-besteffort-pod22222222_3333_4444_5555_666666666666.slice")
+	for _, dir := range []string{burstable, guaranteed, kindPod, filepath.Join(root, "system.slice", "pod-lookalike")} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -92,6 +116,10 @@ func TestPodCgroupPath(t *testing.T) {
 	got, err = podCgroupPath(root, "11111111-2222-3333-4444-555555555555")
 	if err != nil || got != guaranteed {
 		t.Errorf("cgroupfs guaranteed: got %q, %v", got, err)
+	}
+	got, err = podCgroupPath(root, "22222222-3333-4444-5555-666666666666")
+	if err != nil || got != kindPod {
+		t.Errorf("kubelet cgroup root: got %q, %v", got, err)
 	}
 	if _, err := podCgroupPath(root, "missing"); err == nil {
 		t.Error("want error for unknown pod")

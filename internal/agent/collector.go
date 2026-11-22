@@ -195,7 +195,7 @@ func (c *Collector) sample(now time.Time) error {
 					return err
 				}
 			}
-			cur, ok = cifs[v.mount.Source]
+			cur, ok = cifsShare(cifs, v.mount.Source)
 		case kindNFS:
 			if nfs == nil {
 				if nfs, err = c.readMountStats(); err != nil {
@@ -249,6 +249,24 @@ func (c *Collector) readCifsStats() (map[string]procfs.Counters, error) {
 	}
 	defer func() { _ = f.Close() }()
 	return procfs.ParseCifsStats(f)
+}
+
+// cifsShare returns the counters of the share source is on. Stats lists
+// shares as //server/share, but a volume may mount a directory inside one
+// (csi-driver-smb mounts //server/share/<pv>). Volumes on the same share all
+// report the share's counters.
+func cifsShare(stats map[string]procfs.Counters, source string) (procfs.Counters, bool) {
+	for s := source; len(s) > len("//"); {
+		if c, ok := stats[s]; ok {
+			return c, true
+		}
+		i := strings.LastIndex(s, "/")
+		if i < 0 {
+			break
+		}
+		s = s[:i]
+	}
+	return procfs.Counters{}, false
 }
 
 // readMountStats reads the host's /proc/1/mountstats for NFS counters.
@@ -447,28 +465,42 @@ func (c *Collector) maxPressure(podUIDs []string) *float64 {
 // podCgroupPath finds a pod's cgroup under the kubepods hierarchy for either
 // the systemd driver (kubepods.slice/kubepods-burstable.slice/
 // kubepods-burstable-pod<uid_with_underscores>.slice) or the cgroupfs driver
-// (kubepods/burstable/pod<uid>).
+// (kubepods/burstable/pod<uid>). The hierarchy may sit under the kubelet's
+// --cgroup-root (kind: kubelet.slice/kubelet-kubepods.slice/...), so it
+// searches every directory whose name has "kubepods" or "kubelet" in it,
+// up to podCgroupDepth levels down.
 func podCgroupPath(root, podUID string) (string, error) {
-	systemdUID := strings.ReplaceAll(podUID, "-", "_")
-	var candidates []string
-	for _, qos := range []string{"", "burstable", "besteffort"} {
-		if qos == "" {
-			candidates = append(candidates,
-				filepath.Join(root, "kubepods.slice", "kubepods-pod"+systemdUID+".slice"),
-				filepath.Join(root, "kubepods", "pod"+podUID))
-			continue
+	systemdName := "pod" + strings.ReplaceAll(podUID, "-", "_") + ".slice"
+	cgroupfsName := "pod" + podUID
+
+	var found string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || !d.IsDir() || path == root {
+			return nil
 		}
-		candidates = append(candidates,
-			filepath.Join(root, "kubepods.slice", "kubepods-"+qos+".slice", "kubepods-"+qos+"-pod"+systemdUID+".slice"),
-			filepath.Join(root, "kubepods", qos, "pod"+podUID))
-	}
-	for _, p := range candidates {
-		if fi, err := os.Stat(p); err == nil && fi.IsDir() {
-			return p, nil
+		name := d.Name()
+		if strings.HasSuffix(name, systemdName) || name == cgroupfsName {
+			found = path
+			return fs.SkipAll
 		}
+		depth := strings.Count(strings.TrimPrefix(path, root), string(filepath.Separator))
+		if depth >= podCgroupDepth || (!strings.Contains(name, "kubepods") && !strings.Contains(name, "kubelet")) {
+			return fs.SkipDir
+		}
+		return nil
+	})
+	if err != nil {
+		return "", fmt.Errorf("cannot search cgroups for pod %s: %w", podUID, err)
 	}
-	return "", fmt.Errorf("no cgroup for pod %s: %w", podUID, fs.ErrNotExist)
+	if found == "" {
+		return "", fmt.Errorf("no cgroup for pod %s: %w", podUID, fs.ErrNotExist)
+	}
+	return found, nil
 }
+
+// podCgroupDepth is how deep podCgroupPath looks: an optional kubelet
+// --cgroup-root slice, kubepods, a QoS class, then the pod.
+const podCgroupDepth = 4
 
 // writeSample creates the PVC's VolumeIOSample if needed and updates its
 // status.
