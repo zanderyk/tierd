@@ -31,6 +31,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -282,13 +283,18 @@ func discoverVolumes(mounts []procfs.Mount) map[string]volume {
 func (c *Collector) publish(ctx context.Context) {
 	log := logf.FromContext(ctx).WithName("collector")
 	for _, v := range c.volumes {
-		w := c.windows[v.mount.Device]
-		if w == nil {
-			continue
-		}
-		volMetrics, ok := w.Summarize()
-		if !ok {
-			continue
+		// Volumes nothing can measure still get a sample, with no figures,
+		// so the controller can say why.
+		var volMetrics VolumeMetrics
+		if v.kind != kindNone {
+			w := c.windows[v.mount.Device]
+			if w == nil {
+				continue
+			}
+			var ok bool
+			if volMetrics, ok = w.Summarize(); !ok {
+				continue
+			}
 		}
 		cl, err := c.claimFor(ctx, v.pvName)
 		if err != nil {
@@ -315,8 +321,36 @@ func (c *Collector) publish(ctx context.Context) {
 			log.Error(err, "Failed to write VolumeIOSample", "namespace", cl.namespace, "pvc", cl.name)
 		}
 
-		SetVolumeMetrics(*cl, v.pvName, c.Config.NodeName, volMetrics, psi)
+		if v.kind != kindNone {
+			SetVolumeMetrics(*cl, v.pvName, c.Config.NodeName, volMetrics, psi)
+		}
 	}
+}
+
+// measured is the sample's Measured condition: which figures v's source
+// could report.
+func measured(v volume, s VolumeMetrics) metav1.Condition {
+	cond := metav1.Condition{Type: tierdv1.VolumeIOSampleMeasured, Status: metav1.ConditionTrue}
+	if v.kind == kindNone {
+		cond.Status = metav1.ConditionFalse
+		cond.Reason = tierdv1.MeasuredNoSource
+		cond.Message = fmt.Sprintf("tierd cannot measure %s volumes", v.mount.FSType)
+		return cond
+	}
+	var missing []string
+	if !s.HasLatency {
+		missing = append(missing, "latency", "queue depth")
+	}
+	if !s.HasUtilization {
+		missing = append(missing, "utilization")
+	}
+	if len(missing) == 0 {
+		cond.Reason = tierdv1.MeasuredComplete
+		return cond
+	}
+	cond.Reason = tierdv1.MeasuredPartial
+	cond.Message = fmt.Sprintf("%s volumes report no %s", v.kind, strings.Join(missing, ", "))
+	return cond
 }
 
 // managed reports whether the policy controller has assigned the PVC to a
@@ -466,8 +500,13 @@ func (c *Collector) writeSample(ctx context.Context, cl claim, v volume, s Volum
 		Samples:                  int32(s.Samples),
 		IOPS:                     int64(math.Round(s.IOPS)),
 		ThroughputBytesPerSecond: int64(math.Round(s.BytesPerSecond)),
-		Conditions:               base.Status.Conditions,
+		// Cloned: SetStatusCondition edits in place, and base must keep the
+		// old conditions for the patch to include the change.
+		Conditions: slices.Clone(base.Status.Conditions),
 	}
+	cond := measured(v, s)
+	cond.ObservedGeneration = sample.Generation
+	meta.SetStatusCondition(&sample.Status.Conditions, cond)
 	if s.HasLatency {
 		sample.Status.LatencyP50Micros = new(s.LatencyP50.Microseconds())
 		sample.Status.LatencyP95Micros = new(s.LatencyP95.Microseconds())

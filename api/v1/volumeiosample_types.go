@@ -86,6 +86,23 @@ type VolumeIOSampleStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
+// VolumeIOSampleMeasured is the condition type saying which figures the
+// node agent could measure for the volume.
+const VolumeIOSampleMeasured = "Measured"
+
+// Reasons for the Measured condition.
+const (
+	// MeasuredComplete: every figure is reported (block devices).
+	MeasuredComplete = "Complete"
+	// MeasuredPartial: some figures are unset because the source can't
+	// measure them (nfs: utilization; cifs: latency, queue depth and
+	// utilization).
+	MeasuredPartial = "Partial"
+	// MeasuredNoSource: nothing can measure this kind of volume; the sample
+	// has no figures.
+	MeasuredNoSource = "NoSource"
+)
+
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Node",type=string,JSONPath=".status.nodeName"

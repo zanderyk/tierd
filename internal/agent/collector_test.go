@@ -24,6 +24,9 @@ import (
 	"testing"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	tierdv1 "github.com/zanderyk/tierd/api/v1"
 	"github.com/zanderyk/tierd/internal/agent/procfs"
 )
 
@@ -169,5 +172,35 @@ func TestSampleNFSVolume(t *testing.T) {
 	}
 	if !s.HasLatency || s.HasUtilization {
 		t.Errorf("want latency without utilization: %+v", s)
+	}
+}
+
+func TestMeasured(t *testing.T) {
+	block := VolumeMetrics{HasLatency: true, HasUtilization: true}
+	nfs := VolumeMetrics{HasLatency: true}
+	tests := []struct {
+		name    string
+		v       volume
+		s       VolumeMetrics
+		status  metav1.ConditionStatus
+		reason  string
+		message string
+	}{
+		{"block", volume{kind: kindBlock}, block, metav1.ConditionTrue, tierdv1.MeasuredComplete, ""},
+		{"nfs", volume{kind: kindNFS}, nfs, metav1.ConditionTrue, tierdv1.MeasuredPartial,
+			"nfs volumes report no utilization"},
+		{"cifs", volume{kind: kindCifs}, VolumeMetrics{}, metav1.ConditionTrue, tierdv1.MeasuredPartial,
+			"cifs volumes report no latency, queue depth, utilization"},
+		{"blobfuse", volume{kind: kindNone, mount: procfs.Mount{FSType: "fuse.blobfuse2"}}, VolumeMetrics{},
+			metav1.ConditionFalse, tierdv1.MeasuredNoSource, "tierd cannot measure fuse.blobfuse2 volumes"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := measured(tt.v, tt.s)
+			if got.Type != tierdv1.VolumeIOSampleMeasured || got.Status != tt.status ||
+				got.Reason != tt.reason || got.Message != tt.message {
+				t.Errorf("measured = %+v, want %s/%s %q", got, tt.status, tt.reason, tt.message)
+			}
+		})
 	}
 }

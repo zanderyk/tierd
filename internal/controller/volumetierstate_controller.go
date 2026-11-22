@@ -148,9 +148,16 @@ func (r *VolumeTierStateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 			logger.Error(err, "Failed to get VolumeIOSample", "name", req.Name)
 			return ctrl.Result{}, err
 		}
-		// The sample watch requeues once the node agent publishes one.
+
 		setManaged(vts, metav1.ConditionFalse, ConditionReasonAwaitingSample,
 			fmt.Sprintf("Waiting for the node agent's VolumeIOSample (policy %s)", policyName))
+		return ctrl.Result{}, r.patchStatus(ctx, vts, base)
+	}
+
+	// Agent can't measure this type of volume.
+	if meta.IsStatusConditionFalse(vioSample.Status.Conditions, tierdv1.VolumeIOSampleMeasured) {
+		cond := meta.FindStatusCondition(vioSample.Status.Conditions, tierdv1.VolumeIOSampleMeasured)
+		setManaged(vts, metav1.ConditionFalse, cond.Reason, cond.Message)
 		return ctrl.Result{}, r.patchStatus(ctx, vts, base)
 	}
 
@@ -187,7 +194,6 @@ func (r *VolumeTierStateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
-	// Come back when the pending window ends, even if no new sample arrives.
 	return ctrl.Result{RequeueAfter: requeue}, nil
 }
 
@@ -302,31 +308,36 @@ const (
 // let pruneInfeasible drop the entry once the class or PVC size changes.
 func markInfeasible(st *tierdv1.VolumeTierStateStatus, tier, message string,
 	vacUID types.UID, capacity *resource.Quantity, now time.Time) {
-	i := slices.IndexFunc(st.InfeasibleTiers, func(t tierdv1.InfeasibleTier) bool { return t.Name == tier })
 
+	i := slices.IndexFunc(st.InfeasibleTiers, func(t tierdv1.InfeasibleTier) bool { return t.Name == tier })
 	if i < 0 {
 		st.InfeasibleTiers = append(st.InfeasibleTiers, tierdv1.InfeasibleTier{Name: tier})
 		i = len(st.InfeasibleTiers) - 1
 	}
+
 	e := &st.InfeasibleTiers[i]
 
 	// Count each attempt once. Skip if already recorded since the last change.
 	if e.Attempts > 0 && (st.LastModified == nil || e.Since.After(st.LastModified.Time)) {
 		return
 	}
+
 	e.Attempts++
 	e.Since = metav1.NewTime(now)
 	wait := min(infeasibleBackoff*time.Duration(e.Attempts), infeasibleBackoffMax)
 	e.RetryAfter = metav1.NewTime(now.Add(wait))
-	e.Message = message[:min(len(message), maxMessageLen)]
+	e.Message = message
 	e.VACUID = vacUID
 	e.Capacity = capacity
 }
 
 // pruneInfeasible drops entries that may now succeed: the class was deleted
 // or recreated, or the PVC has grown.
-func (r *VolumeTierStateReconciler) pruneInfeasible(ctx context.Context,
-	st *tierdv1.VolumeTierStateStatus, pvc *corev1.PersistentVolumeClaim) error {
+func (r *VolumeTierStateReconciler) pruneInfeasible(
+	ctx context.Context,
+	st *tierdv1.VolumeTierStateStatus,
+	pvc *corev1.PersistentVolumeClaim,
+) error {
 	size := pvc.Status.Capacity.Storage()
 	var keep []tierdv1.InfeasibleTier
 	for _, e := range st.InfeasibleTiers {
@@ -356,9 +367,6 @@ func backoffUntil(st tierdv1.VolumeTierStateStatus, tier string) (until time.Tim
 	}
 	return st.InfeasibleTiers[i].RetryAfter.Time, true
 }
-
-// maxMessageLen matches the CRD's MaxLength on infeasibleTiers[].message.
-const maxMessageLen = 1024
 
 // hasModifyError returns the driver's error if the last modify attempt failed.
 func hasModifyError(pvc *corev1.PersistentVolumeClaim) (string, bool) {

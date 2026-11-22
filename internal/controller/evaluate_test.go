@@ -383,7 +383,14 @@ func TestSyncOverride(t *testing.T) {
 	}
 }
 
-func TestReconcileWithoutSample(t *testing.T) {
+// testPVC is the PVC (and state and sample) reconcileOnce works on.
+const testPVC = "data"
+
+// reconcileOnce reconciles a bound PVC "ns/data" whose state points at an
+// existing policy, starting from a stale MissingPolicy condition, and returns
+// the state's Managed condition.
+func reconcileOnce(t *testing.T, extra ...client.Object) *metav1.Condition {
+	t.Helper()
 	scheme := runtime.NewScheme()
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
@@ -391,7 +398,7 @@ func TestReconcileWithoutSample(t *testing.T) {
 	if err := tierdv1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
-	key := types.NamespacedName{Namespace: "ns", Name: "data"}
+	key := types.NamespacedName{Namespace: "ns", Name: testPVC}
 	pvc := &corev1.PersistentVolumeClaim{
 		Namespace: key.Namespace, Name: key.Name,
 		Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
@@ -409,7 +416,8 @@ func TestReconcileWithoutSample(t *testing.T) {
 		},
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(pvc, vtp, vts).WithStatusSubresource(vts).Build()
+		WithObjects(append([]client.Object{pvc, vtp, vts}, extra...)...).
+		WithStatusSubresource(vts).Build()
 	r := &VolumeTierStateReconciler{Client: c, Recorder: events.NewFakeRecorder(10)}
 
 	if _, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: key}); err != nil {
@@ -419,8 +427,27 @@ func TestReconcileWithoutSample(t *testing.T) {
 	if err := c.Get(t.Context(), key, got); err != nil {
 		t.Fatal(err)
 	}
-	cond := meta.FindStatusCondition(got.Status.Conditions, ConditionVTSManaged)
+	return meta.FindStatusCondition(got.Status.Conditions, ConditionVTSManaged)
+}
+
+func TestReconcileWithoutSample(t *testing.T) {
+	cond := reconcileOnce(t)
 	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != ConditionReasonAwaitingSample {
 		t.Errorf("Managed = %+v, want False/%s", cond, ConditionReasonAwaitingSample)
+	}
+}
+
+func TestReconcileUnmeasurableVolume(t *testing.T) {
+	const msg = "tierd cannot measure fuse.blobfuse2 volumes"
+	sample := &tierdv1.VolumeIOSample{
+		Namespace: "ns", Name: "data",
+		Status: tierdv1.VolumeIOSampleStatus{Conditions: []metav1.Condition{{
+			Type: tierdv1.VolumeIOSampleMeasured, Status: metav1.ConditionFalse,
+			Reason: tierdv1.MeasuredNoSource, Message: msg,
+		}}},
+	}
+	cond := reconcileOnce(t, sample)
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != tierdv1.MeasuredNoSource || cond.Message != msg {
+		t.Errorf("Managed = %+v, want False/%s %q", cond, tierdv1.MeasuredNoSource, msg)
 	}
 }
