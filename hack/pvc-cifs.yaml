@@ -1,0 +1,31 @@
+# Azure Files over SMB (cifs) with a writer, to check the agent's cifs source.
+# Uses the built-in azurefile-csi StorageClass (Standard_LRS, SMB).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  labels:
+    app: tierd-test3
+  name: files
+  namespace: tierd-test
+spec:
+  accessModes:
+  - ReadWriteMany
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: azurefile-csi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: files-writer
+  namespace: tierd-test
+spec:
+  containers:
+  - name: w
+    image: busybox:1.36
+    command: ["sh", "-c", "while true; do dd if=/dev/zero of=/data/f bs=1M count=50 2>/dev/null; sleep 5; done"]
+    volumeMounts: [{name: d, mountPath: /data}]
+  volumes:
+  - name: d
+    persistentVolumeClaim: {claimName: files}
