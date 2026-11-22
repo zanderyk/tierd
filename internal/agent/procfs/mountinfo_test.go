@@ -29,8 +29,8 @@ func TestParseMountInfo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(mounts) != 6 {
-		t.Fatalf("got %d mounts, want 6", len(mounts))
+	if len(mounts) != 7 {
+		t.Fatalf("got %d mounts, want 7", len(mounts))
 	}
 
 	csi := mounts[3]
@@ -51,6 +51,26 @@ func TestParseMountInfo(t *testing.T) {
 	nfs := mounts[5]
 	if nfs.MountPoint != "/mnt/with space" || nfs.Source != "10.0.0.4:/export one" {
 		t.Errorf("octal escapes not decoded: %+v", nfs)
+	}
+
+	// Captured on AKS: a block-mode PVC's publish path, a bind mount of the
+	// device node.
+	block := mounts[6]
+	if block.Root != "/nvme0n4" || block.FSType != "devtmpfs" {
+		t.Errorf("block-mode mount = %+v", block)
+	}
+	uid, pv, ok = ParseCSIBlockPath(block.MountPoint)
+	if !ok || uid != "6903c4a1-00cf-48d5-8155-242d81a4d92a" || pv != "pvc-243b4d34-9bc4-4f96-b0e9-4c0238cb1ed0" {
+		t.Errorf("ParseCSIBlockPath = %q, %q, %v", uid, pv, ok)
+	}
+	if _, _, ok := ParseCSIBlockPath(csi.MountPoint); ok {
+		t.Error("filesystem mount parsed as a block-mode volume")
+	}
+	// kubelet's second path for the same volume must not match, or the
+	// volume would be counted twice.
+	staging := "/var/lib/kubelet/plugins/kubernetes.io/csi/volumeDevices/pvc-243b4d34/dev/6903c4a1-00cf-48d5-8155-242d81a4d92a"
+	if _, _, ok := ParseCSIBlockPath(staging); ok {
+		t.Error("volumeDevices/<pv>/dev/<pod> path parsed as a block-mode volume")
 	}
 }
 

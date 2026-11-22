@@ -98,6 +98,22 @@ func unescapeOctal(s string) string {
 // volume: <kubelet>/pods/<pod-uid>/volumes/kubernetes.io~csi/<pv-name>/mount
 var csiMountRE = regexp.MustCompile(`/pods/([0-9a-f-]+)/volumes/kubernetes\.io~csi/([^/]+)/mount$`)
 
+// csiBlockRE matches kubelet's per-pod publish path for a CSI block-mode
+// volume: <kubelet>/plugins/kubernetes.io/csi/volumeDevices/publish/<pv-name>/<pod-uid>.
+// It is a bind mount of the device node, so the mount's Root is the node's
+// path under /dev (e.g. "/nvme0n4").
+var csiBlockRE = regexp.MustCompile(`/plugins/kubernetes\.io/csi/volumeDevices/publish/([^/]+)/([0-9a-f-]+)$`)
+
+// ParseCSIBlockPath extracts the pod UID and PV name from a kubelet CSI
+// block-mode publish path. ok is false for any other path.
+func ParseCSIBlockPath(mountPoint string) (podUID, pvName string, ok bool) {
+	m := csiBlockRE.FindStringSubmatch(mountPoint)
+	if m == nil {
+		return "", "", false
+	}
+	return m[2], m[1], true
+}
+
 // ParseCSIMountPoint extracts the pod UID and PV name from a kubelet CSI
 // volume mount point. ok is false for any other path.
 func ParseCSIMountPoint(mountPoint string) (podUID, pvName string, ok bool) {

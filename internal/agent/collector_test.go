@@ -33,6 +33,7 @@ import (
 func TestDiscoverVolumes(t *testing.T) {
 	const (
 		kubelet = "/var/lib/kubelet/pods/"
+		plugins = "/var/lib/kubelet/plugins/kubernetes.io/csi/volumeDevices/publish/"
 		sdc     = "8:32"
 	)
 	mounts := []procfs.Mount{
@@ -43,11 +44,21 @@ func TestDiscoverVolumes(t *testing.T) {
 		{Device: "0:88", FSType: "nfs4", MountPoint: kubelet + "cccc-3/volumes/kubernetes.io~csi/pvc-nfs/mount"},
 		{Device: "0:97", FSType: "cifs", MountPoint: kubelet + "cccc-3/volumes/kubernetes.io~csi/pvc-smb/mount"},
 		{Device: "0:61", MountPoint: kubelet + "aaaa-1/volumes/kubernetes.io~projected/token"},
+		// Block-mode: a bind mount of /dev/nvme0n4, so the mount's device is
+		// devtmpfs's; the disk comes from diskstats by name.
+		{Device: "0:5", Root: "/nvme0n4", FSType: "devtmpfs", MountPoint: plugins + "pvc-raw/dddd-4"},
+		// Block-mode on a device diskstats doesn't list: skipped.
+		{Device: "0:5", Root: "/mapper/x", FSType: "devtmpfs", MountPoint: plugins + "pvc-dm/dddd-4"},
 	}
+	disk := map[string]procfs.DiskStat{"259:8": {Name: "nvme0n4"}}
 
-	vols := discoverVolumes(mounts)
-	if len(vols) != 4 {
-		t.Fatalf("got %d volumes, want 4 (pvc-a, pvc-b, pvc-nfs, pvc-smb): %+v", len(vols), vols)
+	vols := discoverVolumes(mounts, disk)
+	if len(vols) != 5 {
+		t.Fatalf("got %d volumes, want 5 (pvc-a, pvc-b, pvc-nfs, pvc-smb, pvc-raw): %+v", len(vols), vols)
+	}
+	raw := vols["pvc-raw"]
+	if raw.mount.Device != "259:8" || raw.kind != kindBlock || !slices.Equal(raw.podUIDs, []string{"dddd-4"}) {
+		t.Errorf("pvc-raw = %+v", raw)
 	}
 	a := vols["pvc-a"]
 	if a.mount.Device != sdc || !slices.Equal(a.podUIDs, []string{"aaaa-1", "bbbb-2"}) {

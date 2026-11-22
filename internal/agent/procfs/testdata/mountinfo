@@ -4,3 +4,4 @@
 530 22 8:32 / /var/lib/kubelet/pods/3b7e2a10-6c1d-4a7e-9f0a-1d2c3b4a5e6f/volumes/kubernetes.io~csi/pvc-0a1b2c3d/mount rw,relatime shared:300 - ext4 /dev/sdc rw
 531 22 0:61 / /var/lib/kubelet/pods/3b7e2a10-6c1d-4a7e-9f0a-1d2c3b4a5e6f/volumes/kubernetes.io~projected/kube-api-access-x2 rw,relatime shared:301 - tmpfs tmpfs rw,size=1048576k
 540 22 0:70 / /mnt/with\040space rw,relatime shared:310 - nfs4 10.0.0.4:/export\040one rw
+3891 25 0:5 /nvme0n4 /var/lib/kubelet/plugins/kubernetes.io/csi/volumeDevices/publish/pvc-243b4d34-9bc4-4f96-b0e9-4c0238cb1ed0/6903c4a1-00cf-48d5-8155-242d81a4d92a rw,relatime shared:668 - devtmpfs devtmpfs rw,size=4052400k,nr_inodes=1013100,mode=755,inode64

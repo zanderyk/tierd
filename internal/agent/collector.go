@@ -164,7 +164,6 @@ func (c *Collector) sample(now time.Time) error {
 	if err != nil {
 		return err
 	}
-	c.volumes = discoverVolumes(mounts)
 
 	df, err := os.Open(filepath.Join(c.Config.ProcRoot, "diskstats"))
 	if err != nil {
@@ -175,6 +174,7 @@ func (c *Collector) sample(now time.Time) error {
 	if err != nil {
 		return err
 	}
+	c.volumes = discoverVolumes(mounts, disk)
 
 	// Read on the first volume that needs them.
 	var cifs, nfs map[string]procfs.Counters
@@ -261,13 +261,29 @@ func (c *Collector) readMountStats() (map[string]procfs.Counters, error) {
 	return procfs.ParseMountStats(f)
 }
 
-// discoverVolumes finds kubelet CSI filesystem mounts and groups them by PV.
-func discoverVolumes(mounts []procfs.Mount) map[string]volume {
+// discoverVolumes finds kubelet CSI volumes and groups them by PV: filesystem
+// mounts, and block-mode volumes resolved to their disk through disk.
+func discoverVolumes(mounts []procfs.Mount, disk map[string]procfs.DiskStat) map[string]volume {
+	// Block-mode volumes name their device ("nvme0n4"); diskstats maps names
+	// to "major:minor".
+	byName := make(map[string]string, len(disk))
+	for dev, d := range disk {
+		byName[d.Name] = dev
+	}
+
 	vols := make(map[string]volume)
 	for _, m := range mounts {
 		podUID, pv, ok := procfs.ParseCSIMountPoint(m.MountPoint)
 		if !ok {
-			continue
+			if podUID, pv, ok = procfs.ParseCSIBlockPath(m.MountPoint); !ok {
+				continue
+			}
+			// The bind mount's own device is devtmpfs; use the disk's.
+			dev, found := byName[strings.TrimPrefix(m.Root, "/")]
+			if !found {
+				continue
+			}
+			m.Device = dev
 		}
 		v := vols[pv]
 		v.pvName, v.mount, v.kind = pv, m, mountKind(m)
