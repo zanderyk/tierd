@@ -6,7 +6,7 @@ resources:
 - metrics_service.yaml
 images:
 - name: controller
-  newName: tierd.local/tierd
-  newTag: e2e
+  newName: ghcr.io/zanderyk/tierd
+  newTag: latest
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization

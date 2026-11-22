@@ -31,3 +31,5 @@ go.work
 bin/
 
 docs/cards/
+# Release artifacts, attached to GitHub releases
+dist/

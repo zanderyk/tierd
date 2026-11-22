@@ -2,9 +2,14 @@ name: Tests
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -23,7 +28,15 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # make test regenerates CRDs, RBAC and deepcopy code and runs go fmt;
+      # the check below fails if any of that, or go.mod, wasn't committed.
       - name: Running Tests
+        run: make test
+
+      - name: Check generated files and go.mod are up to date
         run: |
           go mod tidy
-          make test
+          git diff --exit-code || {
+            echo "::error::Generated files or go.mod are out of date: run 'go mod tidy' and 'make manifests generate fmt', then commit"
+            exit 1
+          }

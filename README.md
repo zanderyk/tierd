@@ -11,21 +11,46 @@ tierd has two parts:
   `VolumeTierState` recording which policy manages it. A PVC matched by more
   than one policy is left unmanaged, and both policies report a `Conflict`
   condition.
-- **Node agent** (DaemonSet): finds CSI volumes mounted on its node, reads the
-  block device's counters from `/proc/diskstats` and the pods' cgroup v2
-  `io.pressure`, and publishes a `VolumeIOSample` per managed volume (IOPS,
-  throughput, p50/p95 latency, utilization, queue depth, PSI).
+- **Node agent** (DaemonSet): finds CSI volumes mounted on its node and
+  publishes a `VolumeIOSample` per managed volume (IOPS, throughput, and where
+  the volume type reports them, p50/p95 latency, utilization, queue depth),
+  plus the pods' cgroup v2 I/O pressure.
+
+The controller compares each sample with the policy's triggers. When a
+trigger holds for its `for` window it recommends the next tier up or down;
+in `Act` mode it also sets the PVC's `volumeAttributesClassName`. A tier the
+driver rejects is rolled back and retried with backoff, and a tier changed by
+hand pauses tierd for that PVC until the
+`tierd.zanderyk.github.io/manual-override` annotation is removed.
 
 ```sh
 kubectl get volumetierpolicies,volumetierstates,volumeiosamples -A
 ```
 
-**Status:** early development. Membership and metrics collection work;
-tier recommendations and Act mode are not implemented yet. See
+**Status:** early development; APIs may change. See
 [docs/PLAN.md](docs/PLAN.md) for the design and roadmap.
 
-Limitations today: filesystem-mode block volumes only (no `volumeMode: Block`,
-NFS or Azure Files metrics).
+What the agent can measure:
+
+| Volume | Source | Reports |
+|---|---|---|
+| Block devices (filesystem or `volumeMode: Block`) | `/proc/diskstats` | everything |
+| NFS | `/proc/1/mountstats` | IOPS, throughput, latency |
+| SMB/cifs | `/proc/fs/cifs/Stats` | IOPS, throughput |
+
+A sample's `Measured` condition says which figures are missing.
+
+## Install
+
+Each release publishes a multi-arch image to `ghcr.io/zanderyk/tierd` and an
+`install.yaml` with the CRDs, controller and agent:
+
+```sh
+kubectl apply -f https://github.com/zanderyk/tierd/releases/latest/download/install.yaml
+```
+
+Then write a `VolumeTierPolicy`; [config/samples](config/samples) has an
+example.
 
 ## Getting Started
 
@@ -65,14 +90,14 @@ digest per build: nodes that already have a tag cached will not pull it again.
 > **NOTE**: If you encounter RBAC errors, you may need to grant yourself cluster-admin
 privileges or be logged in as admin.
 
-**Create instances of your solution**
-You can apply the samples (examples) from the config/sample:
+**Create a policy**
+
+[config/samples](config/samples) has an example policy; set its tiers to
+VolumeAttributesClasses of your driver first:
 
 ```sh
 kubectl apply -k config/samples/
 ```
-
->**NOTE**: Ensure that the samples has default values to test it out.
 
 ### To Uninstall
 **Delete the instances (CRs) from the cluster:**
@@ -96,9 +121,14 @@ make undeploy
 ## Testing
 
 ```sh
-make test   # unit tests + envtest (real API server and etcd, no controllers)
+make test       # unit tests + envtest (real API server and etcd, no controllers)
 make lint
+make test-e2e   # kind cluster with CSI hostpath, NFS and SMB drivers; ~7 minutes
 ```
+
+`make test-e2e` creates a kind cluster, runs the suite in `test/e2e` and
+deletes the cluster. A failed run leaves the cluster up for debugging; run
+`make cleanup-test-e2e` before the next run.
 
 ### Smoke test on AKS
 
@@ -110,8 +140,8 @@ kubectl apply -k hack/aks-smoke
 kubectl get volumeiosample -n tierd-test -w
 ```
 
-Premium SSD v2 needs a zonal node pool; edit the fio pod's `nodeSelector`
-for your cluster. The VM size must allow more uncached disk IOPS than the
+Premium SSD v2 needs a zonal node pool, so every node the fio pod can land on
+must be in a zone. The VM size must allow more uncached disk IOPS than the
 highest tier, or the VM, not the disk, becomes the limit. fio runs at
 `iodepth=32`, which trips node-exporter's `NodeDiskIOSaturation` alert after
 30 minutes; lower it if that alert pages someone.
@@ -161,7 +191,9 @@ previously added to 'dist/chart/values.yaml' or 'dist/chart/manager/manager.yaml
 is manually re-applied afterwards.
 
 ## Contributing
-// TODO(user): Add detailed information on how you would like others to contribute to this project
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Report security issues privately as
+described in [SECURITY.md](SECURITY.md).
 
 **NOTE:** Run `make help` for more information on all potential `make` targets
 
@@ -169,7 +201,7 @@ More information can be found via the [Kubebuilder Documentation](https://book.k
 
 ## License
 
-Copyright 2026.
+Copyright 2026 The tierd Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
