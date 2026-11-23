@@ -194,6 +194,7 @@ func getVTP(ns, name string) *tierdv1.VolumeTierPolicy {
 	return fetch(ns, name, &tierdv1.VolumeTierPolicy{})
 }
 
+//nolint:unparam // ns kept for symmetry with the other get* helpers
 func getSample(ns, name string) *tierdv1.VolumeIOSample {
 	return fetch(ns, name, &tierdv1.VolumeIOSample{})
 }
