@@ -86,11 +86,30 @@ setup-test-e2e: kind ## Set up a Kind cluster for e2e tests if it does not exist
 	esac
 	@"$(KIND)" export kubeconfig --name $(KIND_CLUSTER) --kubeconfig "$(E2E_KUBECONFIG)"
 
+# E2E_LABEL_FILTER selects specs by label: tiering, sources, manager, and
+# tier-change on specs that move a volume between tiers, e.g.
+# E2E_LABEL_FILTER='!tier-change'.
+E2E_LABEL_FILTER ?=
+
 .PHONY: test-e2e
 test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
 	KUBECONFIG="$(E2E_KUBECONFIG)" KIND="$(KIND)" KIND_CLUSTER=$(KIND_CLUSTER) \
-		go test -tags=e2e ./test/e2e/ -v -ginkgo.v -timeout 30m
+		E2E_PROFILE=test/e2e/testdata/profiles/kind.yaml \
+		go test -tags=e2e ./test/e2e/ -v -ginkgo.v -timeout 30m -ginkgo.label-filter="$(E2E_LABEL_FILTER)"
 	$(MAKE) cleanup-test-e2e
+
+# test-e2e-cluster runs the suite against the current kube context, set up as
+# E2E_PROFILE describes (see test/e2e/testdata/profiles/aks.yaml). It creates
+# real volumes there and, if the profile deploys, installs tierd.
+.PHONY: test-e2e-cluster
+test-e2e-cluster: manifests generate fmt vet ## Run the e2e tests against the current kube context with E2E_PROFILE.
+	@case "$(E2E_PROFILE)" in \
+		"") echo "Set E2E_PROFILE, e.g. E2E_PROFILE=test/e2e/testdata/profiles/aks.yaml"; exit 1 ;; \
+		*profiles/kind.yaml) echo "The kind profile needs 'make test-e2e'"; exit 1 ;; \
+	esac
+	@echo "Running e2e against kube context '$$("$(KUBECTL)" config current-context)' with $(E2E_PROFILE)"
+	E2E_PROFILE="$(E2E_PROFILE)" $(if $(filter command line environment,$(origin IMG)),IMG="$(IMG)") \
+		go test -tags=e2e ./test/e2e/ -v -ginkgo.v -timeout 3h -ginkgo.label-filter="$(E2E_LABEL_FILTER)"
 
 .PHONY: cleanup-test-e2e
 cleanup-test-e2e: kind ## Tear down the Kind cluster used for e2e tests

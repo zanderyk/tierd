@@ -157,7 +157,7 @@ func recommend(
 		return until.Sub(now)
 	}
 	st.RecommendedTier = next
-	st.Reason = fmt.Sprintf("%s for %s", why, waited.Round(time.Minute))
+	st.Reason = fmt.Sprintf("%s for %s", why, waited.Round(time.Second))
 	return 0
 }
 

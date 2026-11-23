@@ -44,7 +44,7 @@ const metricsServiceName = "tierd-controller-manager-metrics-service"
 // metricsRoleBindingName is the name of the RBAC that will be created to allow get the metrics data
 const metricsRoleBindingName = "tierd-metrics-binding"
 
-var _ = Describe("Manager", Ordered, func() {
+var _ = Describe("Manager", Ordered, Label("manager"), func() {
 	var controllerPodName string
 
 	curlPod := &corev1.Pod{Namespace: namespace, Name: "curl-metrics"}
@@ -74,7 +74,7 @@ var _ = Describe("Manager", Ordered, func() {
 		}
 	})
 
-	SetDefaultEventuallyTimeout(2 * time.Minute)
+	SetDefaultEventuallyTimeout(profile.Timeout.Duration)
 	SetDefaultEventuallyPollingInterval(time.Second)
 
 	Context("Manager", func() {
@@ -114,11 +114,11 @@ var _ = Describe("Manager", Ordered, func() {
 			Expect(token).NotTo(BeEmpty())
 
 			By("ensuring the controller pod is ready")
-			Eventually(func() bool { return podReady(namespace, controllerPodName) }, 3*time.Minute).
+			Eventually(func() bool { return podReady(namespace, controllerPodName) }).
 				Should(BeTrue(), "Controller pod not ready")
 
 			By("verifying that the controller manager is serving the metrics server")
-			Eventually(func() (string, error) { return podLogs(controllerPodName, 0) }, 3*time.Minute).
+			Eventually(func() (string, error) { return podLogs(controllerPodName, 0) }).
 				Should(ContainSubstring("Serving metrics server"), "Metrics server not yet started")
 
 			// +kubebuilder:scaffold:e2e-metrics-webhooks-readiness
@@ -149,8 +149,7 @@ var _ = Describe("Manager", Ordered, func() {
 			Expect(k8s.Create(ctx, pod)).To(Succeed(), "Failed to create curl-metrics pod")
 
 			By("waiting for the curl-metrics pod to complete.")
-			Eventually(func() corev1.PodPhase { return fetch(namespace, pod.Name, &corev1.Pod{}).Status.Phase },
-				5*time.Minute).Should(Equal(corev1.PodSucceeded), "curl pod in wrong status")
+			Eventually(func() corev1.PodPhase { return fetch(namespace, pod.Name, &corev1.Pod{}).Status.Phase }).Should(Equal(corev1.PodSucceeded), "curl pod in wrong status")
 
 			By("getting the metrics by checking curl-metrics logs")
 			Eventually(func() (string, error) { return podLogs(pod.Name, 0) }).

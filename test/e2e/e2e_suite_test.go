@@ -31,9 +31,6 @@ import (
 	"github.com/zanderyk/tierd/test/utils"
 )
 
-// managerImage is the manager and agent image built and loaded into kind.
-const managerImage = "tierd.local/tierd:e2e"
-
 const (
 	agentDaemonSet = "tierd-agent"
 	// hostpathDataDir is where the CSI hostpath driver keeps volumes on the
@@ -42,9 +39,9 @@ const (
 	hostpathDataDir = "/var/lib/csi-hostpath-data"
 )
 
-// TestE2E runs the e2e suite against the kind cluster that `make test-e2e`
-// creates. It deploys the CSI hostpath driver and tierd once, then runs the
-// specs.
+// TestE2E runs the e2e suite against the cluster in $KUBECONFIG, set up as
+// the profile in $E2E_PROFILE says (profile_test.go): by default the kind
+// cluster `make test-e2e` creates.
 func TestE2E(t *testing.T) {
 	RegisterFailHandler(Fail)
 	_, _ = fmt.Fprintf(GinkgoWriter, "Starting tierd e2e test suite\n")
@@ -53,19 +50,27 @@ func TestE2E(t *testing.T) {
 
 var _ = BeforeSuite(func() {
 	setupClient()
+	_, _ = fmt.Fprintf(GinkgoWriter, "Running against %s with profile %+v\n", restCfg.Host, *profile)
 
-	By("building the manager image")
-	_, err := utils.Run(exec.Command("make", "docker-build", "IMG="+managerImage))
-	Expect(err).NotTo(HaveOccurred(), "Failed to build the manager image")
+	if profile.Kind {
+		By("building the manager image")
+		_, err := utils.Run(exec.Command("make", "docker-build", "IMG="+profile.Image))
+		Expect(err).NotTo(HaveOccurred(), "Failed to build the manager image")
 
-	By("loading the manager image on Kind")
-	Expect(utils.LoadImageToKindClusterWithName(managerImage)).To(Succeed(), "Failed to load the manager image into Kind")
+		By("loading the manager image on Kind")
+		Expect(utils.LoadImageToKindClusterWithName(profile.Image)).To(Succeed(),
+			"Failed to load the manager image into Kind")
 
-	setupHostpathDriver()
-	deployTierd()
+		setupHostpathDriver()
+	}
+	if profile.Deploy {
+		deployTierd()
+	}
 
-	By("creating the StorageClasses and VolumeAttributesClasses")
-	applyFile("test/e2e/testdata/classes.yaml")
+	By("creating the profile's StorageClasses and VolumeAttributesClasses")
+	for _, m := range profile.Manifests {
+		applyFile(m)
+	}
 })
 
 // setupHostpathDriver mounts the hostpath data dir on a loop device in the
@@ -89,22 +94,23 @@ mount -o loop /var/lib/tierd-e2e.img %[1]s`, hostpathDataDir)
 }
 
 // deployTierd installs the CRDs and deploys the manager and agent with
-// kustomize. The agent samples every second and publishes every second over
-// a 3s window so the specs' `for` windows can be short.
+// kustomize, then sets the agent's intervals from the profile.
 func deployTierd() {
 	By("installing CRDs")
 	_, err := utils.Run(exec.Command("make", "install"))
 	Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
 
 	By("deploying the controller-manager and agent")
-	_, err = utils.Run(exec.Command("make", "deploy", "IMG="+managerImage))
+	_, err = utils.Run(exec.Command("make", "deploy", "IMG="+profile.Image))
 	Expect(err).NotTo(HaveOccurred(), "Failed to deploy tierd")
 
-	By("speeding up the agent")
+	By("setting the agent's intervals")
+	a := profile.Agent
 	agent := &appsv1.DaemonSet{Namespace: namespace, Name: agentDaemonSet}
 	update(agent, func(ds *appsv1.DaemonSet) {
 		c := &ds.Spec.Template.Spec.Containers[0]
-		c.Args = append(c.Args, "--sample-interval=1s", "--publish-interval=1s", "--window=3s")
+		c.Args = append(c.Args, "--sample-interval="+a.SampleInterval.Duration.String(),
+			"--publish-interval="+a.PublishInterval.Duration.String(), "--window="+a.Window.Duration.String())
 	})
 
 	waitRolledOut(agent)

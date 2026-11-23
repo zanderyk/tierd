@@ -1,5 +1,5 @@
-# StorageClasses and VolumeAttributesClasses for every spec. The suite applies
-# them once. A VolumeAttributesClass needs at least one parameter.
+# StorageClasses and VolumeAttributesClasses for the kind profile. The suite
+# applies them once. A VolumeAttributesClass needs at least one parameter.
 
 # Hostpath tiers. The driver has no real limits; the policies' ceilings are
 # made up.
@@ -34,30 +34,6 @@ metadata:
 driverName: hostpath.csi.k8s.io
 parameters:
   iops: "1000"
----
-# A driver that isn't installed: its PVCs stay Pending, which is enough for
-# driver matching.
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-  name: e2e-other
-provisioner: other.csi.example.com
----
-apiVersion: storage.k8s.io/v1
-kind: VolumeAttributesClass
-metadata:
-  name: e2e-other-base
-driverName: other.csi.example.com
-parameters:
-  tier: base
----
-apiVersion: storage.k8s.io/v1
-kind: VolumeAttributesClass
-metadata:
-  name: e2e-other-fast
-driverName: other.csi.example.com
-parameters:
-  tier: fast
 ---
 # NFS and SMB, served from testdata/servers.yaml. Neither driver can modify
 # volumes, so their policies only recommend.

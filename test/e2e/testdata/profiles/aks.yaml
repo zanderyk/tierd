@@ -1,0 +1,66 @@
+# An AKS cluster with Premium SSD v2 disks and Azure Files. Needs the
+# StorageClasses managed-csi-premium-v2, azurefile-csi (SMB) and
+# azurefile-csi-premium-nfs (see hack/pvc-explore.yaml). Run with:
+#
+#   make docker-build docker-push IMG=<acr>/tierd:<tag>
+#   make test-e2e-cluster E2E_PROFILE=test/e2e/testdata/profiles/aks.yaml IMG=<acr>/tierd:<tag>
+#
+# Premium SSD v2 limits how often a disk's performance can change in 24h.
+# Every run creates fresh disks, but the tiering specs change the same disk
+# several times; run a subset with E2E_LABEL_FILTER if Azure starts refusing
+# changes.
+kind: false
+deploy: true
+agent:
+  sampleInterval: 1s
+  publishInterval: 1s
+  window: 3s
+manifests:
+- test/e2e/testdata/aks-classes.yaml
+scaleFor: 10s
+timeout: 30s
+# Over 80% of base (3000) and under fast (6000).
+loadIOPS: 4000
+# Premium SSD v2 allows 500 IOPS per GiB; 20Gi fits the fast tier.
+pvcSize: 20Gi
+
+tiering:
+  storageClass: managed-csi-premium-v2
+  base: {name: e2e-pv2-base, iops: 3000, throughputMiBps: 125}
+  fast: {name: e2e-pv2-fast, iops: 6000, throughputMiBps: 250}
+  # More IOPS than a 20Gi disk allows; Azure refuses it.
+  rejected: e2e-pv2-rejected
+  # Each 3s burst keeps the 3s window over 80% of base (2400 IOPS) for a
+  # few seconds, well under scaleFor.
+  bursty: {burst: 3s, idle: 9s, observe: 30s}
+
+sources:
+- name: block
+  storageClass: managed-csi-premium-v2
+  block: true
+  direct: true
+  mode: Act
+  base: {name: e2e-pv2-base, iops: 3000, throughputMiBps: 125}
+  fast: {name: e2e-pv2-fast, iops: 6000, throughputMiBps: 250}
+  startOnBase: true
+  measured: Complete
+# Azure Files: recommend only. File shares can't be scaled down for a while
+# after scaling up, so the suite doesn't move them.
+- name: nfs
+  storageClass: azurefile-csi-premium-nfs
+  direct: true
+  mode: Recommend
+  base: {name: e2e-files-base, iops: 3000, throughputMiBps: 125}
+  fast: {name: e2e-files-fast, iops: 6000, throughputMiBps: 250}
+  measured: Partial
+  latency: true
+# fio fsyncs every SMB write, so it can't reach loadIOPS on a standard
+# share. The base ceiling here is lower than the class's so the load it does
+# reach crosses 80% of it. The policy only recommends, so the mismatch is
+# harmless.
+- name: smb
+  storageClass: azurefile-csi
+  mode: Recommend
+  base: {name: e2e-files-base, iops: 500, throughputMiBps: 60}
+  fast: {name: e2e-files-fast, iops: 6000, throughputMiBps: 250}
+  measured: Partial

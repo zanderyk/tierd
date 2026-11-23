@@ -1,0 +1,52 @@
+# The kind cluster `make test-e2e` creates. Volumes are CSI hostpath on a loop
+# device; the driver has no real limits, so the ceilings are made up, which
+# lets the windows be seconds instead of minutes.
+kind: true
+image: tierd.local/tierd:e2e
+deploy: true
+agent:
+  sampleInterval: 1s
+  publishInterval: 1s
+  window: 3s
+manifests:
+- test/e2e/testdata/classes.yaml
+scaleFor: 10s
+timeout: 30s
+loadIOPS: 400
+pvcSize: 200Mi
+
+tiering:
+  storageClass: e2e-hostpath
+  base: {name: e2e-base, iops: 100, throughputMiBps: 1000}
+  fast: {name: e2e-fast, iops: 100000, throughputMiBps: 10000}
+  rejected: e2e-rejected
+  # Each burst keeps the 3s window over the base ceiling for ~5s, half of
+  # scaleFor.
+  bursty: {burst: 1s, idle: 11s, observe: 30s}
+
+sources:
+- name: block
+  storageClass: e2e-hostpath
+  block: true
+  direct: true
+  mode: Act
+  base: {name: e2e-base, iops: 100, throughputMiBps: 1000}
+  fast: {name: e2e-fast, iops: 100000, throughputMiBps: 10000}
+  startOnBase: true
+  measured: Complete
+# NFS and SMB drivers can't modify volumes: recommend only, and adopt.
+- name: nfs
+  storageClass: e2e-nfs
+  direct: true
+  mode: Recommend
+  base: {name: e2e-nfs-base, iops: 100, throughputMiBps: 1000}
+  fast: {name: e2e-nfs-fast, iops: 100000, throughputMiBps: 10000}
+  measured: Partial
+  latency: true
+# csi-driver-smb mounts a subdirectory of the share.
+- name: smb
+  storageClass: e2e-smb
+  mode: Recommend
+  base: {name: e2e-smb-base, iops: 100, throughputMiBps: 1000}
+  fast: {name: e2e-smb-fast, iops: 100000, throughputMiBps: 10000}
+  measured: Partial

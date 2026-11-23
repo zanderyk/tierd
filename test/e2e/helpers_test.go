@@ -131,6 +131,16 @@ func create(objs ...client.Object) {
 	}
 }
 
+// createIfMissing creates objs that don't exist yet.
+func createIfMissing(objs ...client.Object) {
+	GinkgoHelper()
+	for _, o := range objs {
+		if err := k8s.Create(ctx, o); !apierrors.IsAlreadyExists(err) {
+			Expect(err).NotTo(HaveOccurred(), "create %T %s", o, o.GetName())
+		}
+	}
+}
+
 // remove deletes objs, ignoring ones already gone.
 func remove(objs ...client.Object) {
 	for _, o := range objs {
@@ -143,7 +153,7 @@ func removeAndWait(objs ...client.Object) {
 	GinkgoHelper()
 	remove(objs...)
 	for _, o := range objs {
-		Eventually(func() bool { return gone(o.GetNamespace(), o.GetName(), o) }, 2*time.Minute).
+		Eventually(func() bool { return gone(o.GetNamespace(), o.GetName(), o) }, profile.Timeout.Duration).
 			Should(BeTrue(), "%T %s not deleted", o, o.GetName())
 	}
 }
@@ -249,7 +259,7 @@ func waitRolledOut(obj client.Object) {
 		default:
 			Fail(fmt.Sprintf("can't wait for a rollout of %T", obj))
 		}
-	}, 5*time.Minute, time.Second).Should(Succeed(), "%T %s did not roll out", obj, obj.GetName())
+	}, profile.Timeout.Duration, time.Second).Should(Succeed(), "%T %s did not roll out", obj, obj.GetName())
 }
 
 // execIn runs cmd in a pod's first container.
