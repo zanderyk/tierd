@@ -149,7 +149,9 @@ var _ = Describe("Manager", Ordered, Label("manager"), func() {
 			Expect(k8s.Create(ctx, pod)).To(Succeed(), "Failed to create curl-metrics pod")
 
 			By("waiting for the curl-metrics pod to complete.")
-			Eventually(func() corev1.PodPhase { return fetch(namespace, pod.Name, &corev1.Pod{}).Status.Phase }).Should(Equal(corev1.PodSucceeded), "curl pod in wrong status")
+			Eventually(func() corev1.PodPhase {
+				return fetch(namespace, pod.Name, &corev1.Pod{}).Status.Phase
+			}).Should(Equal(corev1.PodSucceeded), "curl pod in wrong status")
 
 			By("getting the metrics by checking curl-metrics logs")
 			Eventually(func() (string, error) { return podLogs(pod.Name, 0) }).
