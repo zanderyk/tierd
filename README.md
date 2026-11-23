@@ -1,4 +1,9 @@
 # tierd
+
+[![Tests](https://github.com/zanderyk/tierd/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/zanderyk/tierd/actions/workflows/test.yml)
+[![Lint](https://github.com/zanderyk/tierd/actions/workflows/lint.yml/badge.svg?branch=main)](https://github.com/zanderyk/tierd/actions/workflows/lint.yml)
+[![E2E Tests](https://github.com/zanderyk/tierd/actions/workflows/test-e2e.yml/badge.svg?branch=main)](https://github.com/zanderyk/tierd/actions/workflows/test-e2e.yml)
+[![Coverage](https://github.com/zanderyk/tierd/raw/badges/coverage.svg)](https://github.com/zanderyk/tierd/actions/workflows/test.yml)
 A vendor-agnostic Kubernetes controller that automatically moves PVCs between performance tiers via `VolumeAttributesClasses` based on observed I/O behavior.
 
 ## Description

@@ -17,6 +17,20 @@ spec:
   ports:
   - {name: nfs, port: 2049}
 ---
+# A fresh nfsd refuses new OPENs for its NFSv4 grace period, 90s by default,
+# so the fio pod's first open would block past the profile's timeout. 10s is
+# the kernel's minimum.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nfs-conf
+  namespace: tierd-sources
+data:
+  nfs.conf: |
+    [nfsd]
+    grace-time=10
+    lease-time=10
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -40,9 +54,12 @@ spec:
           privileged: true
         volumeMounts:
         - {name: data, mountPath: /exports}
+        - {name: conf, mountPath: /etc/nfs.conf, subPath: nfs.conf}
       volumes:
       - name: data
         hostPath: {path: /var/lib/tierd-nfs, type: DirectoryOrCreate}
+      - name: conf
+        configMap: {name: nfs-conf}
 ---
 apiVersion: v1
 kind: Secret
