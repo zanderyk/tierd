@@ -38,7 +38,7 @@ jobs:
       - name: Report coverage
         id: coverage
         run: |
-          percent="$(go tool cover -func=cover.out | awk '/^total:/ {sub(/%/, "", $NF); print $NF}')"
+          percent="$(make -s coverage)"
           echo "percent=$percent" >> "$GITHUB_OUTPUT"
           echo "Unit test coverage: **${percent}%**" >> "$GITHUB_STEP_SUMMARY"
 

@@ -49,6 +49,9 @@ var _ = Describe("VolumeTierPolicy Controller", func() {
 		otherDriver = "other.csi.example.com"
 		otherLow    = "other-tier-low"
 		otherHigh   = "other-tier-high"
+
+		// vacParam is the parameter that makes each test class distinct.
+		vacParam = "tier"
 	)
 	pvcLabels := map[string]string{"app": "test-db"}
 
@@ -116,7 +119,7 @@ var _ = Describe("VolumeTierPolicy Controller", func() {
 			Expect(k8sClient.Create(ctx, &storagev1.VolumeAttributesClass{
 				Name:       name,
 				DriverName: driver,
-				Parameters: map[string]string{"tier": name},
+				Parameters: map[string]string{vacParam: name},
 			})).To(Succeed())
 		}
 		Expect(k8sClient.Create(ctx, &corev1.PersistentVolumeClaim{
@@ -156,7 +159,7 @@ var _ = Describe("VolumeTierPolicy Controller", func() {
 			Expect(k8sClient.Create(ctx, &storagev1.VolumeAttributesClass{
 				Name:       vac,
 				DriverName: otherDriver,
-				Parameters: map[string]string{"tier": vac},
+				Parameters: map[string]string{vacParam: vac},
 			})).To(Succeed())
 		}
 		vtp := newPolicy(name)
@@ -295,6 +298,61 @@ var _ = Describe("VolumeTierPolicy Controller", func() {
 		Expect(stateGone()).To(BeTrue())
 		Expect(errors.IsNotFound(k8sClient.Get(ctx,
 			types.NamespacedName{Namespace: namespace, Name: policyA}, &zanderykgithubiov1.VolumeTierPolicy{}))).To(BeTrue())
+	})
+
+	Describe("tier validation", func() {
+		// expectNotReady reconciles the policy and expects Ready False with
+		// reason, a message containing msg, and no state for the PVC.
+		expectNotReady := func(vtp *zanderykgithubiov1.VolumeTierPolicy, reason VTPConditionReason, msg string) {
+			Expect(k8sClient.Create(ctx, vtp)).To(Succeed())
+			reconcileVTP(vtp.Name)
+
+			ready := meta.FindStatusCondition(getPolicy(vtp.Name).Status.Conditions, string(ConditionVTPReady))
+			Expect(ready).NotTo(BeNil())
+			Expect(ready.Status).To(Equal(metav1.ConditionFalse))
+			Expect(ready.Reason).To(Equal(string(reason)))
+			Expect(ready.Message).To(ContainSubstring(msg))
+			Expect(errors.IsNotFound(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: pvcName},
+				&zanderykgithubiov1.VolumeTierState{}))).To(BeTrue(), "state created for an invalid policy")
+		}
+
+		It("reports a missing VolumeAttributesClass", func() {
+			vtp := newPolicy(policyA)
+			vtp.Spec.Tiers = append(vtp.Spec.Tiers, zanderykgithubiov1.Tier{VACName: "test-tier-missing"})
+			expectNotReady(vtp, VTPConditionReasonVolumeAttributesClassNotFound, "test-tier-missing")
+		})
+
+		It("reports tiers of different drivers", func() {
+			newOtherPolicy(policyB) // creates the other driver's classes
+			vtp := newPolicy(policyA)
+			vtp.Spec.Tiers = []zanderykgithubiov1.Tier{{VACName: vacLow}, {VACName: otherHigh}}
+			// Sorted by driver.
+			expectNotReady(vtp, VTPConditionReasonDriverMismatch,
+				otherDriver+" ("+otherHigh+"); "+driver+" ("+vacLow+")")
+		})
+
+		It("reports ceilings that do not increase", func() {
+			vtp := newPolicy(policyA)
+			vtp.Spec.Tiers = []zanderykgithubiov1.Tier{
+				{VACName: vacLow, Ceilings: &zanderykgithubiov1.Ceiling{IOPS: ptr.To[int64](5000)}},
+				{VACName: vacHigh, Ceilings: &zanderykgithubiov1.Ceiling{IOPS: ptr.To[int64](3000)}},
+			}
+			expectNotReady(vtp, VTPConditionReasonInvalidTiers, "iops ceiling 3000 must be greater")
+		})
+
+		It("becomes Ready once the missing class is created", func() {
+			const missing = "test-tier-late"
+			vtp := newPolicy(policyA)
+			vtp.Spec.Tiers = append(vtp.Spec.Tiers, zanderykgithubiov1.Tier{VACName: missing})
+			expectNotReady(vtp, VTPConditionReasonVolumeAttributesClassNotFound, missing)
+
+			vac := &storagev1.VolumeAttributesClass{Name: missing, DriverName: driver, Parameters: map[string]string{vacParam: missing}}
+			Expect(k8sClient.Create(ctx, vac)).To(Succeed())
+			DeferCleanup(forceDelete, vac)
+			reconcileVTP(policyA)
+
+			Expect(meta.IsStatusConditionTrue(getPolicy(policyA).Status.Conditions, string(ConditionVTPReady))).To(BeTrue())
+		})
 	})
 
 	Describe("watch mappings", func() {

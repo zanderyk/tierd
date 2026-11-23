@@ -65,6 +65,15 @@ vet: ## Run go vet against code.
 test: manifests generate fmt vet setup-envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
+# Code unit tests don't run: generated deepcopy, the binaries' main packages,
+# and the e2e suite's helpers.
+COVER_EXCLUDE ?= zz_generated\.|/cmd/|/test/utils/
+
+.PHONY: coverage
+coverage: ## Print the total unit test coverage percent (e.g. 86.9) from cover.out (run make test first), leaving out COVER_EXCLUDE.
+	@grep -vE '$(COVER_EXCLUDE)' cover.out > cover.filtered.out
+	@go tool cover -func=cover.filtered.out | awk '/^total:/ {sub(/%/, "", $$NF); print $$NF}'
+
 # The e2e suite runs on a kind cluster with the CSI hostpath driver (see
 # test/e2e). It uses its own kubeconfig, so your current kubectl context is
 # left alone. A failed run keeps the cluster for debugging; delete it with
