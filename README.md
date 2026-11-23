@@ -48,8 +48,8 @@ A sample's `Measured` condition says which figures are missing.
 
 ## Install
 
-Each release publishes a multi-arch image to `ghcr.io/zanderyk/tierd`, a Helm
-chart, and an `install.yaml` with the CRDs, controller and agent.
+Each release publishes a multi-arch image to `ghcr.io/zanderyk/tierd` and a Helm
+chart.
 
 With Helm:
 
@@ -148,22 +148,6 @@ make test-e2e   # kind cluster with CSI hostpath, NFS and SMB drivers; ~7 minute
 `make test-e2e` creates a kind cluster, runs the suite in `test/e2e` and
 deletes the cluster. A failed run leaves the cluster up for debugging; run
 `make cleanup-test-e2e` before the next run.
-
-### Smoke test on AKS
-
-`hack/aks-smoke` creates two Premium SSD v2 tiers (3000 and 5000 IOPS), a
-10Gi PVC, an fio pod and a Recommend-mode policy in namespace `tierd-test`:
-
-```sh
-kubectl apply -k hack/aks-smoke
-kubectl get volumeiosample -n tierd-test -w
-```
-
-Premium SSD v2 needs a zonal node pool, so every node the fio pod can land on
-must be in a zone. The VM size must allow more uncached disk IOPS than the
-highest tier, or the VM, not the disk, becomes the limit. fio runs at
-`iodepth=32`, which trips node-exporter's `NodeDiskIOSaturation` alert after
-30 minutes; lower it if that alert pages someone.
 
 ## Releases
 
