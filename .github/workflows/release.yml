@@ -57,15 +57,19 @@ jobs:
 
       # Install the release on kind before publishing it. The image is loaded
       # into kind rather than pulled, since a new ghcr.io package is private
-      # until it's made public.
+      # until it's made public. Only the amd64 image is exported: the pushed
+      # tag is a multi-platform index, the pull fetches only this runner's
+      # platform, and kind imports every platform an archive lists, so
+      # `kind load docker-image` fails on the arm64 content it never got.
       - name: Smoke test install.yaml on kind
         env:
           IMG: ${{ env.IMAGE_REPO }}:${{ github.ref_name }}
         run: |
           make setup-test-e2e
           export KUBECONFIG="$PWD/bin/e2e.kubeconfig"
-          docker pull "$IMG"
-          bin/kind load docker-image "$IMG" --name tierd-test-e2e
+          docker pull --platform linux/amd64 "$IMG"
+          docker save --platform linux/amd64 "$IMG" -o "$RUNNER_TEMP/image.tar"
+          bin/kind load image-archive "$RUNNER_TEMP/image.tar" --name tierd-test-e2e
           kubectl apply -f dist/install.yaml
           kubectl -n tierd-system rollout status deployment/tierd-controller-manager --timeout=3m
           kubectl -n tierd-system rollout status daemonset/tierd-agent --timeout=3m
