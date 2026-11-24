@@ -62,14 +62,47 @@ helm install tierd oci://ghcr.io/zanderyk/charts/tierd --version <version> \
 `agent` section sets the sampling intervals, tolerations and resources of
 the node agent.
 
-Or with kubectl:
 
-```sh
-kubectl apply -f https://github.com/zanderyk/tierd/releases/latest/download/install.yaml
+Then write a `VolumeTierPolicy`;
+
+```yaml
+# Moves PVCs labelled app=postgres between two VolumeAttributesClasses.
+# Replace the tier names with VolumeAttributesClasses of your CSI driver,
+# lowest first, and set each tier's ceilings to what it provisions.
+apiVersion: tierd.zanderyk.github.io/v1
+kind: VolumeTierPolicy
+metadata:
+  labels:
+    app.kubernetes.io/name: tierd
+    app.kubernetes.io/managed-by: kustomize
+  name: volumetierpolicy-sample
+spec:
+  # Recommend only records the tier tierd would pick; Act also moves the PVC.
+  mode: Recommend
+  selector:
+    matchLabels:
+      app: postgres
+  tiers:
+  - name: standard
+    ceilings:
+      iops: 3000
+      throughputMiBps: 125
+  - name: fast
+    ceilings:
+      iops: 10000
+      throughputMiBps: 500
+  scaleUp:
+    # Scale up when the volume uses more than 80% of its tier's ceilings
+    # for 5 minutes.
+    for: 5m
+    utilizationAbove: 80
+  scaleDown:
+    # Scale down when it would use less than 30% of the tier below for an
+    # hour.
+    for: 1h
+    utilizationBelow: 30
 ```
 
-Then write a `VolumeTierPolicy`; [config/samples](config/samples) has an
-example.
 
 ## Getting Started
 
@@ -125,7 +158,7 @@ kubectl apply -k config/samples/
 kubectl delete -k config/samples/
 ```
 
-**Delete the APIs(CRDs) from the cluster:**
+**Delete the CRDs from the cluster:**
 
 ```sh
 make uninstall
@@ -149,22 +182,12 @@ make test-e2e   # kind cluster with CSI hostpath, NFS and SMB drivers; ~7 minute
 deletes the cluster. A failed run leaves the cluster up for debugging; run
 `make cleanup-test-e2e` before the next run.
 
-## Releases
-
-Pushing a `v*` tag builds and publishes the image, chart and `install.yaml`
-(`.github/workflows/release.yml`).
-
-### Helm chart
 
 `helm/chart` is generated from `config/` by kubebuilder's helm plugin:
 
 ```sh
 make helm-chart
 ```
-
-It keeps `values.yaml`, `Chart.yaml` and `templates/agent/` (the node
-agent, which the plugin doesn't template), and regenerates the rest. CI fails
-if the chart is out of date.
 
 ## Contributing
 
