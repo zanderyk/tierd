@@ -104,6 +104,32 @@ spec:
 ```
 
 
+## KubeVirt virtual machines
+
+VM disks are tiered like any other PVC, in place while the VM runs.
+
+- I/O pressure stays near zero for VM disks, so use `utilizationAbove`,
+  `utilizationBelow` and `latencyP95AboveMs` rather than `ioPressure*`.
+- Set a DataVolume's starting tier in `spec.pvc.volumeAttributesClassName`;
+  CDI rejects it in `spec.storage`. DataVolume labels are copied to the PVC.
+- tierd changes the PVC, not the DataVolume, so the DataVolume keeps showing
+  the starting tier.
+
+## GitOps
+
+Exclude `volumeAttributesClassName` from drift detection on PVCs you apply
+directly, or Argo CD or Flux will revert tierd's changes. For Argo CD:
+
+```yaml
+spec:
+  ignoreDifferences:
+  - kind: PersistentVolumeClaim
+    jsonPointers:
+    - /spec/volumeAttributesClassName
+```
+
+For Flux, annotate the PVC `kustomize.toolkit.fluxcd.io/ssa: IfNotPresent`.
+
 ## Getting Started
 
 ### Prerequisites
