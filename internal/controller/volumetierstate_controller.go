@@ -40,7 +40,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	tierdv1 "github.com/zanderyk/tierd/api/v1"
+	tierdv1alpha1 "github.com/zanderyk/tierd/api/v1alpha1"
 )
 
 // statePolicyRefIndex indexes VolumeTierStates by status.policyRef, so a
@@ -90,7 +90,7 @@ type VolumeTierStateReconciler struct {
 func (r *VolumeTierStateReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := logf.FromContext(ctx)
 
-	vts := &tierdv1.VolumeTierState{}
+	vts := &tierdv1alpha1.VolumeTierState{}
 	if err := r.Get(ctx, req.NamespacedName, vts); err != nil {
 		if !apierrors.IsNotFound(err) {
 			logger.Error(err, "Failed to get VolumeTierState", "name", req.Name)
@@ -134,7 +134,7 @@ func (r *VolumeTierStateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, nil
 	}
 
-	vtp := &tierdv1.VolumeTierPolicy{}
+	vtp := &tierdv1alpha1.VolumeTierPolicy{}
 	key := types.NamespacedName{Namespace: req.Namespace, Name: policyName}
 	if err := r.Get(ctx, key, vtp); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -150,7 +150,7 @@ func (r *VolumeTierStateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
-	vioSample := &tierdv1.VolumeIOSample{}
+	vioSample := &tierdv1alpha1.VolumeIOSample{}
 	if err := r.Get(ctx, req.NamespacedName, vioSample); err != nil {
 		if !apierrors.IsNotFound(err) {
 			logger.Error(err, "Failed to get VolumeIOSample", "name", req.Name)
@@ -163,8 +163,8 @@ func (r *VolumeTierStateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	// Agent can't measure this type of volume.
-	if meta.IsStatusConditionFalse(vioSample.Status.Conditions, tierdv1.VolumeIOSampleMeasured) {
-		cond := meta.FindStatusCondition(vioSample.Status.Conditions, tierdv1.VolumeIOSampleMeasured)
+	if meta.IsStatusConditionFalse(vioSample.Status.Conditions, tierdv1alpha1.VolumeIOSampleMeasured) {
+		cond := meta.FindStatusCondition(vioSample.Status.Conditions, tierdv1alpha1.VolumeIOSampleMeasured)
 		setManaged(vts, metav1.ConditionFalse, cond.Reason, cond.Message)
 		return ctrl.Result{}, r.patchStatus(ctx, vts, base)
 	}
@@ -192,7 +192,7 @@ func (r *VolumeTierStateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		vts.Status.LastAppliedTier = vts.Status.RecommendedTier
 		vts.Status.LastModified = &now
 		// Start the stopwatch fresh on the new tier
-		vts.Status.PendingDirection = tierdv1.ScaleDirectionNone
+		vts.Status.PendingDirection = tierdv1alpha1.ScaleDirectionNone
 		vts.Status.PendingSince = nil
 		if vts.Status.CurrentTier == "" {
 			r.Recorder.Eventf(pvc, vts, corev1.EventTypeNormal, "TierChanged", "AdoptTier", "Set tier %s (policy: %s): %s", vts.Status.RecommendedTier, vtp.GetName(), vts.Status.Reason)
@@ -220,10 +220,10 @@ func (r *VolumeTierStateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 // the Managed condition set, when the PVC can't be tiered.
 func (r *VolumeTierStateReconciler) recommendTier(
 	ctx context.Context,
-	vtp *tierdv1.VolumeTierPolicy,
-	vts *tierdv1.VolumeTierState,
+	vtp *tierdv1alpha1.VolumeTierPolicy,
+	vts *tierdv1alpha1.VolumeTierState,
 	pvc *corev1.PersistentVolumeClaim,
-	sample *tierdv1.VolumeIOSample,
+	sample *tierdv1alpha1.VolumeIOSample,
 ) (requeue time.Duration, managed bool, err error) {
 	if vts.Status.CurrentTier != "" {
 		if tierIndex(vtp.Spec, vts.Status.CurrentTier) < 0 {
@@ -254,7 +254,7 @@ func (r *VolumeTierStateReconciler) recommendTier(
 
 // driverMismatch explains why the policy's tiers can't apply to pvc's
 // volume, or returns "" if they can. The policy's tiers share one driver.
-func (r *VolumeTierStateReconciler) driverMismatch(ctx context.Context, vtp *tierdv1.VolumeTierPolicy, pvc *corev1.PersistentVolumeClaim) (string, error) {
+func (r *VolumeTierStateReconciler) driverMismatch(ctx context.Context, vtp *tierdv1alpha1.VolumeTierPolicy, pvc *corev1.PersistentVolumeClaim) (string, error) {
 	pv := &corev1.PersistentVolume{}
 	if err := r.Get(ctx, client.ObjectKey{Name: pvc.Spec.VolumeName}, pv); err != nil {
 		return "", fmt.Errorf("cannot get PersistentVolume %s: %w", pvc.Spec.VolumeName, err)
@@ -278,8 +278,8 @@ func (r *VolumeTierStateReconciler) driverMismatch(ctx context.Context, vtp *tie
 
 // checkModify sets the Modifying condition from the PVC's modify status. On
 // a failure it records the tier as infeasible and, in Act mode, rolls back.
-func (r *VolumeTierStateReconciler) checkModify(ctx context.Context, vtp *tierdv1.VolumeTierPolicy,
-	vts *tierdv1.VolumeTierState, pvc *corev1.PersistentVolumeClaim) error {
+func (r *VolumeTierStateReconciler) checkModify(ctx context.Context, vtp *tierdv1alpha1.VolumeTierPolicy,
+	vts *tierdv1alpha1.VolumeTierState, pvc *corev1.PersistentVolumeClaim) error {
 	mvs := pvc.Status.ModifyVolumeStatus
 	if mvs == nil {
 		setCondition(vts, ConditionVTSModifying, metav1.ConditionFalse, "Idle", "")
@@ -314,7 +314,7 @@ func (r *VolumeTierStateReconciler) checkModify(ctx context.Context, vtp *tierdv
 		// Don't undo a tier the user set by hand, even if it failed. An
 		// adopted PVC (no tier before) can't be rolled back: Kubernetes
 		// won't unset volumeAttributesClassName.
-		if vtp.Spec.Mode == tierdv1.VolumeTierPolicyModeAct &&
+		if vtp.Spec.Mode == tierdv1alpha1.VolumeTierPolicyModeAct &&
 			vts.Status.CurrentTier != "" &&
 			!meta.IsStatusConditionTrue(vts.Status.Conditions, ConditionVTSManualOverride) &&
 			ptr.Deref(pvc.Spec.VolumeAttributesClassName, "") != vts.Status.CurrentTier {
@@ -343,7 +343,7 @@ func (r *VolumeTierStateReconciler) checkModify(ctx context.Context, vtp *tierdv
 // It adds the annotation when someone changes the tier by hand, and resumes
 // from the PVC's current tier once the annotation is removed.
 func (r *VolumeTierStateReconciler) syncOverride(ctx context.Context,
-	vts *tierdv1.VolumeTierState, pvc *corev1.PersistentVolumeClaim) error {
+	vts *tierdv1alpha1.VolumeTierState, pvc *corev1.PersistentVolumeClaim) error {
 	specVAC := ptr.Deref(pvc.Spec.VolumeAttributesClassName, "")
 	_, annotated := pvc.Annotations[ManualOverrideAnnotation]
 	wasOverridden := meta.IsStatusConditionTrue(vts.Status.Conditions, ConditionVTSManualOverride)
@@ -364,7 +364,7 @@ func (r *VolumeTierStateReconciler) syncOverride(ctx context.Context,
 			}
 		}
 		vts.Status.LastAppliedTier = specVAC
-		vts.Status.PendingDirection = tierdv1.ScaleDirectionNone
+		vts.Status.PendingDirection = tierdv1alpha1.ScaleDirectionNone
 		vts.Status.PendingSince = nil
 		setCondition(vts, ConditionVTSManualOverride, metav1.ConditionFalse, "Resumed", "")
 	case changedByHand(pvc, vts.Status, specVAC):
@@ -390,7 +390,7 @@ func (r *VolumeTierStateReconciler) syncOverride(ctx context.Context,
 // here: the PVC patch triggers the next reconcile, which may still read the
 // state from a cache without it. LastAppliedTier is only a fallback for PVCs
 // tierd changed before the annotation existed.
-func changedByHand(pvc *corev1.PersistentVolumeClaim, st tierdv1.VolumeTierStateStatus, specVAC string) bool {
+func changedByHand(pvc *corev1.PersistentVolumeClaim, st tierdv1alpha1.VolumeTierStateStatus, specVAC string) bool {
 	want := cmp.Or(pvc.Annotations[AppliedTierAnnotation], st.LastAppliedTier, st.CurrentTier)
 	return want != "" && specVAC != want
 }
@@ -408,12 +408,12 @@ const (
 
 // markInfeasible records that moving to tier failed. vacUID and capacity
 // let pruneInfeasible drop the entry once the class or PVC size changes.
-func markInfeasible(st *tierdv1.VolumeTierStateStatus, tier, message string,
+func markInfeasible(st *tierdv1alpha1.VolumeTierStateStatus, tier, message string,
 	vacUID types.UID, capacity *resource.Quantity, now time.Time) {
 
-	i := slices.IndexFunc(st.InfeasibleTiers, func(t tierdv1.InfeasibleTier) bool { return t.Name == tier })
+	i := slices.IndexFunc(st.InfeasibleTiers, func(t tierdv1alpha1.InfeasibleTier) bool { return t.Name == tier })
 	if i < 0 {
-		st.InfeasibleTiers = append(st.InfeasibleTiers, tierdv1.InfeasibleTier{Name: tier})
+		st.InfeasibleTiers = append(st.InfeasibleTiers, tierdv1alpha1.InfeasibleTier{Name: tier})
 		i = len(st.InfeasibleTiers) - 1
 	}
 
@@ -437,11 +437,11 @@ func markInfeasible(st *tierdv1.VolumeTierStateStatus, tier, message string,
 // or recreated, or the PVC has grown.
 func (r *VolumeTierStateReconciler) pruneInfeasible(
 	ctx context.Context,
-	st *tierdv1.VolumeTierStateStatus,
+	st *tierdv1alpha1.VolumeTierStateStatus,
 	pvc *corev1.PersistentVolumeClaim,
 ) error {
 	size := pvc.Status.Capacity.Storage()
-	var keep []tierdv1.InfeasibleTier
+	var keep []tierdv1alpha1.InfeasibleTier
 	for _, e := range st.InfeasibleTiers {
 		vac := &storagev1.VolumeAttributesClass{}
 		err := r.Get(ctx, client.ObjectKey{Name: e.Name}, vac)
@@ -462,8 +462,8 @@ func (r *VolumeTierStateReconciler) pruneInfeasible(
 
 // backoffUntil is when tier's infeasible backoff ends; ok is false if the
 // tier never failed.
-func backoffUntil(st tierdv1.VolumeTierStateStatus, tier string) (until time.Time, ok bool) {
-	i := slices.IndexFunc(st.InfeasibleTiers, func(t tierdv1.InfeasibleTier) bool { return t.Name == tier })
+func backoffUntil(st tierdv1alpha1.VolumeTierStateStatus, tier string) (until time.Time, ok bool) {
+	i := slices.IndexFunc(st.InfeasibleTiers, func(t tierdv1alpha1.InfeasibleTier) bool { return t.Name == tier })
 	if i < 0 {
 		return time.Time{}, false
 	}
@@ -482,7 +482,7 @@ func hasModifyError(pvc *corev1.PersistentVolumeClaim) (string, bool) {
 	return "", false
 }
 
-func setCondition(vts *tierdv1.VolumeTierState, typ string, status metav1.ConditionStatus, reason, message string) {
+func setCondition(vts *tierdv1alpha1.VolumeTierState, typ string, status metav1.ConditionStatus, reason, message string) {
 	meta.SetStatusCondition(
 		&vts.Status.Conditions,
 		metav1.Condition{
@@ -497,10 +497,10 @@ func setCondition(vts *tierdv1.VolumeTierState, typ string, status metav1.Condit
 
 // shouldAct reports whether the controller should move the PVC to the
 // recommended tier now.
-func shouldAct(vtp *tierdv1.VolumeTierPolicy, vts *tierdv1.VolumeTierState, pvc *corev1.PersistentVolumeClaim) bool {
+func shouldAct(vtp *tierdv1alpha1.VolumeTierPolicy, vts *tierdv1alpha1.VolumeTierState, pvc *corev1.PersistentVolumeClaim) bool {
 	st := vts.Status
 	switch {
-	case vtp.Spec.Mode != tierdv1.VolumeTierPolicyModeAct:
+	case vtp.Spec.Mode != tierdv1alpha1.VolumeTierPolicyModeAct:
 		return false
 	case meta.IsStatusConditionTrue(st.Conditions, ConditionVTSManualOverride):
 		return false // the user picked the tier; leave it
@@ -521,16 +521,16 @@ func shouldAct(vtp *tierdv1.VolumeTierPolicy, vts *tierdv1.VolumeTierState, pvc 
 // be action taken:
 //   - Scale up if _any_ threshold is exceeded
 //   - Scale down if _all_ conditions hold
-func (r *VolumeTierStateReconciler) Evaluate(vtp *tierdv1.VolumeTierPolicy,
-	currentTier string, sample *tierdv1.VolumeIOSample) (tierdv1.ScaleDirection, string) {
+func (r *VolumeTierStateReconciler) Evaluate(vtp *tierdv1alpha1.VolumeTierPolicy,
+	currentTier string, sample *tierdv1alpha1.VolumeIOSample) (tierdv1alpha1.ScaleDirection, string) {
 	i := tierIndex(vtp.Spec, currentTier)
 	if i < 0 {
-		return tierdv1.ScaleDirectionNone, "current tier is not in the policy"
+		return tierdv1alpha1.ScaleDirectionNone, "current tier is not in the policy"
 	}
 	return wantDirection(vtp.Spec, i, sample.Status)
 }
 
-func (r *VolumeTierStateReconciler) patchStatus(ctx context.Context, vts, base *tierdv1.VolumeTierState) error {
+func (r *VolumeTierStateReconciler) patchStatus(ctx context.Context, vts, base *tierdv1alpha1.VolumeTierState) error {
 	if err := r.Status().Patch(ctx, vts, client.MergeFrom(base)); err != nil {
 		logf.FromContext(ctx).Error(err, "Failed to patch VolumeTierState status")
 		return fmt.Errorf("cannot patch VTS status: %w", err)
@@ -549,7 +549,7 @@ func (r *VolumeTierStateReconciler) ValidatePVC(ctx context.Context, nsName type
 	return pvc, nil
 }
 
-func setManaged(vts *tierdv1.VolumeTierState, status metav1.ConditionStatus, reason, message string) {
+func setManaged(vts *tierdv1alpha1.VolumeTierState, status metav1.ConditionStatus, reason, message string) {
 	meta.SetStatusCondition(&vts.Status.Conditions, metav1.Condition{
 		Type:               ConditionVTSManaged,
 		Status:             status,
@@ -561,7 +561,7 @@ func setManaged(vts *tierdv1.VolumeTierState, status metav1.ConditionStatus, rea
 
 // statesForPolicy maps a VolumeTierPolicy to the VolumeTierStates it manages.
 func (r *VolumeTierStateReconciler) statesForPolicy(ctx context.Context, obj client.Object) []reconcile.Request {
-	states := &tierdv1.VolumeTierStateList{}
+	states := &tierdv1alpha1.VolumeTierStateList{}
 	if err := r.List(
 		ctx,
 		states,
@@ -580,18 +580,18 @@ func (r *VolumeTierStateReconciler) statesForPolicy(ctx context.Context, obj cli
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *VolumeTierStateReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &tierdv1.VolumeTierState{}, statePolicyRefIndex,
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &tierdv1alpha1.VolumeTierState{}, statePolicyRefIndex,
 		func(obj client.Object) []string {
-			return []string{obj.(*tierdv1.VolumeTierState).Status.PolicyRef}
+			return []string{obj.(*tierdv1alpha1.VolumeTierState).Status.PolicyRef}
 		}); err != nil {
 		return fmt.Errorf("cannot index VolumeTierState policyRef: %w", err)
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&tierdv1.VolumeTierState{}).
+		For(&tierdv1alpha1.VolumeTierState{}).
 		Named("volumetierstate").
 		Watches(&corev1.PersistentVolumeClaim{}, &handler.EnqueueRequestForObject{}).
-		Watches(&tierdv1.VolumeIOSample{}, &handler.EnqueueRequestForObject{}).
-		Watches(&tierdv1.VolumeTierPolicy{}, handler.EnqueueRequestsFromMapFunc(r.statesForPolicy)).
+		Watches(&tierdv1alpha1.VolumeIOSample{}, &handler.EnqueueRequestForObject{}).
+		Watches(&tierdv1alpha1.VolumeTierPolicy{}, handler.EnqueueRequestsFromMapFunc(r.statesForPolicy)).
 		Complete(r)
 }

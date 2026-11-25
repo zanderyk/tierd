@@ -18,7 +18,7 @@ parameters:
   provisionedIOPS: "6000"
   provisionedBandwidth: "250"
 ---
-apiVersion: tierd.zanderyk.github.io/v1
+apiVersion: tierd.zanderyk.github.io/v1alpha1
 kind: VolumeTierPolicy
 metadata:
   name: tierd-files

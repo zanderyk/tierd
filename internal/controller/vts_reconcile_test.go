@@ -33,7 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
-	tierdv1 "github.com/zanderyk/tierd/api/v1"
+	tierdv1alpha1 "github.com/zanderyk/tierd/api/v1alpha1"
 )
 
 const testDriver = "disk.csi.example.com"
@@ -44,9 +44,9 @@ type vtsFixture struct {
 	pvc    *corev1.PersistentVolumeClaim
 	pv     *corev1.PersistentVolume
 	vac    *storagev1.VolumeAttributesClass
-	vtp    *tierdv1.VolumeTierPolicy
-	vts    *tierdv1.VolumeTierState
-	sample *tierdv1.VolumeIOSample
+	vtp    *tierdv1alpha1.VolumeTierPolicy
+	vts    *tierdv1alpha1.VolumeTierState
+	sample *tierdv1alpha1.VolumeIOSample
 }
 
 // newVTSFixture is a bound PVC on CSI volume "pv", not yet on a tier,
@@ -66,24 +66,24 @@ func newVTSFixture() *vtsFixture {
 			}},
 		},
 		vac: &storagev1.VolumeAttributesClass{Name: tierBase, DriverName: testDriver},
-		vtp: &tierdv1.VolumeTierPolicy{
+		vtp: &tierdv1alpha1.VolumeTierPolicy{
 			Namespace: testKey.Namespace, Name: testPolicy,
-			Spec: tierdv1.VolumeTierPolicySpec{
-				Mode: tierdv1.VolumeTierPolicyModeAct,
-				Tiers: []tierdv1.Tier{
-					{VACName: tierBase, Ceilings: &tierdv1.Ceiling{IOPS: new(int64(1000))}},
-					{VACName: tierFast, Ceilings: &tierdv1.Ceiling{IOPS: new(int64(5000))}},
+			Spec: tierdv1alpha1.VolumeTierPolicySpec{
+				Mode: tierdv1alpha1.VolumeTierPolicyModeAct,
+				Tiers: []tierdv1alpha1.Tier{
+					{VACName: tierBase, Ceilings: &tierdv1alpha1.Ceiling{IOPS: new(int64(1000))}},
+					{VACName: tierFast, Ceilings: &tierdv1alpha1.Ceiling{IOPS: new(int64(5000))}},
 				},
-				ScaleUp: tierdv1.ScaleUp{UtilizationAbove: new(int32(80))},
+				ScaleUp: tierdv1alpha1.ScaleUp{UtilizationAbove: new(int32(80))},
 			},
 		},
-		vts: &tierdv1.VolumeTierState{
+		vts: &tierdv1alpha1.VolumeTierState{
 			Namespace: testKey.Namespace, Name: testKey.Name,
-			Status: tierdv1.VolumeTierStateStatus{PolicyRef: testPolicy},
+			Status: tierdv1alpha1.VolumeTierStateStatus{PolicyRef: testPolicy},
 		},
-		sample: &tierdv1.VolumeIOSample{
+		sample: &tierdv1alpha1.VolumeIOSample{
 			Namespace: testKey.Namespace, Name: testKey.Name,
-			Status: tierdv1.VolumeIOSampleStatus{IOPS: 900},
+			Status: tierdv1alpha1.VolumeIOSampleStatus{IOPS: 900},
 		},
 	}
 }
@@ -155,7 +155,7 @@ func TestReconcileStateManaged(t *testing.T) {
 		{
 			name: "no tier declares ceilings",
 			mutate: func(f *vtsFixture) {
-				f.vtp.Spec.Tiers = []tierdv1.Tier{{VACName: tierBase}, {VACName: tierFast}}
+				f.vtp.Spec.Tiers = []tierdv1alpha1.Tier{{VACName: tierBase}, {VACName: tierFast}}
 			},
 			wantStatus: metav1.ConditionFalse, wantReason: ConditionReasonCannotAdopt, wantMessage: "No tier declares ceilings",
 		},
@@ -245,10 +245,10 @@ func TestReconcileErrors(t *testing.T) {
 		mutate func(f *vtsFixture)
 		funcs  interceptor.Funcs
 	}{
-		{name: "reading the state", funcs: failGet(is(&tierdv1.VolumeTierState{}))},
+		{name: "reading the state", funcs: failGet(is(&tierdv1alpha1.VolumeTierState{}))},
 		{name: "reading the PVC", funcs: failGet(is(&corev1.PersistentVolumeClaim{}))},
-		{name: "reading the policy", funcs: failGet(is(&tierdv1.VolumeTierPolicy{}))},
-		{name: "reading the sample", funcs: failGet(is(&tierdv1.VolumeIOSample{}))},
+		{name: "reading the policy", funcs: failGet(is(&tierdv1alpha1.VolumeTierPolicy{}))},
+		{name: "reading the sample", funcs: failGet(is(&tierdv1alpha1.VolumeIOSample{}))},
 		{name: "reading the PV", funcs: failGet(is(&corev1.PersistentVolume{}))},
 		{name: "reading the tier class", funcs: failGet(is(&storagev1.VolumeAttributesClass{}))},
 		{name: "recording an invalid PVC", mutate: func(f *vtsFixture) { f.pvc = nil }, funcs: failStatusPatch},
@@ -295,7 +295,7 @@ func TestStatesForPolicyListFails(t *testing.T) {
 		return apierrors.NewServiceUnavailable("injected")
 	}})
 	r := &VolumeTierStateReconciler{Client: c, Recorder: rec}
-	if got := r.statesForPolicy(t.Context(), &tierdv1.VolumeTierPolicy{Namespace: "ns", Name: testPolicy}); got != nil {
+	if got := r.statesForPolicy(t.Context(), &tierdv1alpha1.VolumeTierPolicy{Namespace: "ns", Name: testPolicy}); got != nil {
 		t.Errorf("statesForPolicy on a failing List = %v, want nil", got)
 	}
 }

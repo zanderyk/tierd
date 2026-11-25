@@ -48,6 +48,9 @@ A sample's `Measured` condition says which figures are missing.
 
 ## Install
 
+Requires Kubernetes v1.34+ with cgroup v2 nodes and a CSI driver that
+supports `ControllerModifyVolume` (VolumeAttributesClass changes).
+
 Each release publishes a multi-arch image to `ghcr.io/zanderyk/tierd` and a Helm
 chart.
 
@@ -62,20 +65,16 @@ helm install tierd oci://ghcr.io/zanderyk/charts/tierd --version <version> \
 `agent` section sets the sampling intervals, tolerations and resources of
 the node agent.
 
-
-Then write a `VolumeTierPolicy`;
+Then write a `VolumeTierPolicy`:
 
 ```yaml
 # Moves PVCs labelled app=postgres between two VolumeAttributesClasses.
 # Replace the tier names with VolumeAttributesClasses of your CSI driver,
 # lowest first, and set each tier's ceilings to what it provisions.
-apiVersion: tierd.zanderyk.github.io/v1
+apiVersion: tierd.zanderyk.github.io/v1alpha1
 kind: VolumeTierPolicy
 metadata:
-  labels:
-    app.kubernetes.io/name: tierd
-    app.kubernetes.io/managed-by: kustomize
-  name: volumetierpolicy-sample
+  name: postgres
 spec:
   # Recommend only records the tier tierd would pick; Act also moves the PVC.
   mode: Recommend
@@ -103,6 +102,7 @@ spec:
     utilizationBelow: 30
 ```
 
+To uninstall, `helm uninstall tierd --namespace tierd-system`.
 
 ## KubeVirt virtual machines
 
@@ -130,73 +130,19 @@ spec:
 
 For Flux, annotate the PVC `kustomize.toolkit.fluxcd.io/ssa: IfNotPresent`.
 
-## Getting Started
+## Development
 
-### Prerequisites
-- go version v1.27+
-- docker version 17.03+.
-- kubectl version v1.34+.
-- A Kubernetes v1.34+ cluster (VolumeAttributesClass GA) with cgroup v2 nodes
-  and a CSI driver that supports `ControllerModifyVolume`.
-
-### To Deploy on the cluster
-**Build and push your image to the location specified by `IMG`:**
+Requires Go 1.27+ and Docker. Build and deploy from source (the controller
+and node agent share one image):
 
 ```sh
-make docker-build docker-push IMG=<some-registry>/tierd:tag
+make docker-build docker-push IMG=<registry>/tierd:<tag>
+make install                         # CRDs
+make deploy IMG=<registry>/tierd:<tag>
+make undeploy uninstall              # remove
 ```
 
-**NOTE:** This image ought to be published in the personal registry you specified.
-And it is required to have access to pull the image from the working environment.
-Make sure you have the proper permission to the registry if the above commands don’t work.
-
-**Install the CRDs into the cluster:**
-
-```sh
-make install
-```
-
-**Deploy the controller and node agent with the image specified by `IMG`:**
-
-```sh
-make deploy IMG=<some-registry>/tierd:tag
-```
-
-Both use the same image (`/manager` and `/agent`). Use a unique tag or a
-digest per build: nodes that already have a tag cached will not pull it again.
-
-> **NOTE**: If you encounter RBAC errors, you may need to grant yourself cluster-admin
-privileges or be logged in as admin.
-
-**Create a policy**
-
-[config/samples](config/samples) has an example policy; set its tiers to
-VolumeAttributesClasses of your driver first:
-
-```sh
-kubectl apply -k config/samples/
-```
-
-### To Uninstall
-**Delete the instances (CRs) from the cluster:**
-
-```sh
-kubectl delete -k config/samples/
-```
-
-**Delete the CRDs from the cluster:**
-
-```sh
-make uninstall
-```
-
-**UnDeploy the controller from the cluster:**
-
-```sh
-make undeploy
-```
-
-## Testing
+Tests:
 
 ```sh
 make test       # unit tests + envtest (real API server and etcd, no controllers)
@@ -204,39 +150,15 @@ make lint
 make test-e2e   # kind cluster with CSI hostpath, NFS and SMB drivers; ~7 minutes
 ```
 
-`make test-e2e` creates a kind cluster, runs the suite in `test/e2e` and
-deletes the cluster. A failed run leaves the cluster up for debugging; run
-`make cleanup-test-e2e` before the next run.
-
-
-`helm/chart` is generated from `config/` by kubebuilder's helm plugin:
-
-```sh
-make helm-chart
-```
+`make test-e2e` deletes its kind cluster when it passes; after a failure, run
+`make cleanup-test-e2e`. `helm/chart` is generated from `config/` with
+`make helm-chart`. `make help` lists all targets.
 
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Report security issues privately as
 described in [SECURITY.md](SECURITY.md).
 
-**NOTE:** Run `make help` for more information on all potential `make` targets
-
-More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
-
 ## License
 
-Copyright 2026 The tierd Authors.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-
+Apache 2.0; see [LICENSE](LICENSE).

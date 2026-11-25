@@ -20,8 +20,8 @@ resources:
   domain: zanderyk.github.io
   group: tierd
   kind: VolumeTierPolicy
-  path: github.com/zanderyk/tierd/api/v1
-  version: v1
+  path: github.com/zanderyk/tierd/api/v1alpha1
+  version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
@@ -29,14 +29,14 @@ resources:
   domain: zanderyk.github.io
   group: tierd
   kind: VolumeTierState
-  path: github.com/zanderyk/tierd/api/v1
-  version: v1
+  path: github.com/zanderyk/tierd/api/v1alpha1
+  version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
   domain: zanderyk.github.io
   group: tierd
   kind: VolumeIOSample
-  path: github.com/zanderyk/tierd/api/v1
-  version: v1
+  path: github.com/zanderyk/tierd/api/v1alpha1
+  version: v1alpha1
 version: "3"

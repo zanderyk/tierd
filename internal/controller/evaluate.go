@@ -21,28 +21,28 @@ import (
 	"slices"
 	"time"
 
-	tierdv1 "github.com/zanderyk/tierd/api/v1"
+	tierdv1alpha1 "github.com/zanderyk/tierd/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // wantDirection reports which way the sample pushes a PVC on tiers[tier]
 // right now, and why. It ignores the `for` windows.
-func wantDirection(spec tierdv1.VolumeTierPolicySpec, tier int, s tierdv1.VolumeIOSampleStatus) (tierdv1.ScaleDirection, string) {
+func wantDirection(spec tierdv1alpha1.VolumeTierPolicySpec, tier int, s tierdv1alpha1.VolumeIOSampleStatus) (tierdv1alpha1.ScaleDirection, string) {
 	if tier < len(spec.Tiers)-1 {
 		if why, ok := scaleUpHolds(spec.ScaleUp, spec.Tiers[tier], s); ok {
-			return tierdv1.ScaleDirectionUp, why
+			return tierdv1alpha1.ScaleDirectionUp, why
 		}
 	}
 	if spec.ScaleDown != nil && tier > 0 {
 		if why, ok := scaleDownHolds(*spec.ScaleDown, spec.Tiers[tier-1], s); ok {
-			return tierdv1.ScaleDirectionDown, why
+			return tierdv1alpha1.ScaleDirectionDown, why
 		}
 	}
-	return tierdv1.ScaleDirectionNone, ""
+	return tierdv1alpha1.ScaleDirectionNone, ""
 }
 
 // scaleUpHolds is true if any configured trigger holds.
-func scaleUpHolds(up tierdv1.ScaleUp, current tierdv1.Tier, s tierdv1.VolumeIOSampleStatus) (string, bool) {
+func scaleUpHolds(up tierdv1alpha1.ScaleUp, current tierdv1alpha1.Tier, s tierdv1alpha1.VolumeIOSampleStatus) (string, bool) {
 	if up.IOPressureAbove != nil {
 		if p, ok := pressure(s); ok && p > float64(*up.IOPressureAbove) {
 			return fmt.Sprintf("I/O pressure %.0f%% > %d%%", p, *up.IOPressureAbove), true
@@ -64,7 +64,7 @@ func scaleUpHolds(up tierdv1.ScaleUp, current tierdv1.Tier, s tierdv1.VolumeIOSa
 // scaleDownHolds is true if every configured condition holds. Utilization is
 // measured against the lower tier's ceilings, or device busy time if it has
 // none. Unknown pressure or utilization blocks a scale-down.
-func scaleDownHolds(down tierdv1.ScaleDown, lower tierdv1.Tier, s tierdv1.VolumeIOSampleStatus) (string, bool) {
+func scaleDownHolds(down tierdv1alpha1.ScaleDown, lower tierdv1alpha1.Tier, s tierdv1alpha1.VolumeIOSampleStatus) (string, bool) {
 	pct, ok := ceilingPercent(lower.Ceilings, s)
 	if !ok {
 		if s.UtilizationPercent == nil {
@@ -85,7 +85,7 @@ func scaleDownHolds(down tierdv1.ScaleDown, lower tierdv1.Tier, s tierdv1.Volume
 
 // ceilingPercent is usage as a percentage of the tier's declared ceilings,
 // taking the higher of IOPS and throughput. ok is false without ceilings.
-func ceilingPercent(c *tierdv1.Ceiling, s tierdv1.VolumeIOSampleStatus) (float64, bool) {
+func ceilingPercent(c *tierdv1alpha1.Ceiling, s tierdv1alpha1.VolumeIOSampleStatus) (float64, bool) {
 	if c == nil || (c.IOPS == nil && c.ThroughputMiBPS == nil) {
 		return 0, false
 	}
@@ -100,7 +100,7 @@ func ceilingPercent(c *tierdv1.Ceiling, s tierdv1.VolumeIOSampleStatus) (float64
 }
 
 // pressure is the sample's PSI IOPressureSomeAvg60 in percent; ok is false if unknown.
-func pressure(s tierdv1.VolumeIOSampleStatus) (float64, bool) {
+func pressure(s tierdv1alpha1.VolumeIOSampleStatus) (float64, bool) {
 	if s.IOPressureSomeAvg60 == nil {
 		return 0, false
 	}
@@ -115,9 +115,9 @@ func pressure(s tierdv1.VolumeIOSampleStatus) (float64, bool) {
 //   - waited < `for` → recommend current tier, return time left
 //   - waited >= `for` → recommend next tier in dir, return 0
 func recommend(
-	st *tierdv1.VolumeTierStateStatus,
-	spec tierdv1.VolumeTierPolicySpec,
-	direction tierdv1.ScaleDirection,
+	st *tierdv1alpha1.VolumeTierStateStatus,
+	spec tierdv1alpha1.VolumeTierPolicySpec,
+	direction tierdv1alpha1.ScaleDirection,
 	why string,
 	now time.Time,
 ) time.Duration {
@@ -125,7 +125,7 @@ func recommend(
 		st.PendingDirection = direction
 		st.PendingSince = new(metav1.NewTime(now))
 	}
-	if direction == tierdv1.ScaleDirectionNone {
+	if direction == tierdv1alpha1.ScaleDirectionNone {
 		st.PendingSince = nil
 		st.RecommendedTier = st.CurrentTier
 		st.Reason = ""
@@ -133,7 +133,7 @@ func recommend(
 	}
 
 	window := spec.ScaleUp.For.Duration
-	if direction == tierdv1.ScaleDirectionDown {
+	if direction == tierdv1alpha1.ScaleDirectionDown {
 		window = spec.ScaleDown.For.Duration
 	}
 
@@ -145,7 +145,7 @@ func recommend(
 	}
 
 	i := tierIndex(spec, st.CurrentTier)
-	if direction == tierdv1.ScaleDirectionUp {
+	if direction == tierdv1alpha1.ScaleDirectionUp {
 		i++
 	} else {
 		i--
@@ -162,8 +162,8 @@ func recommend(
 }
 
 // tierIndex is the position of the named tier in spec.Tiers, or -1.
-func tierIndex(spec tierdv1.VolumeTierPolicySpec, name string) int {
-	return slices.IndexFunc(spec.Tiers, func(t tierdv1.Tier) bool { return t.VACName == name })
+func tierIndex(spec tierdv1alpha1.VolumeTierPolicySpec, name string) int {
+	return slices.IndexFunc(spec.Tiers, func(t tierdv1alpha1.Tier) bool { return t.VACName == name })
 }
 
 // pickTier chooses the starting tier for a PVC with no VolumeAttributesClass:
@@ -171,7 +171,7 @@ func tierIndex(spec tierdv1.VolumeTierPolicySpec, name string) int {
 // threshold (100% if none is set), or the highest tier with ceilings if
 // none fits. ok is false when no tier declares ceilings, since the load
 // can't be compared then.
-func pickTier(spec tierdv1.VolumeTierPolicySpec, s tierdv1.VolumeIOSampleStatus) (tier, why string, ok bool) {
+func pickTier(spec tierdv1alpha1.VolumeTierPolicySpec, s tierdv1alpha1.VolumeIOSampleStatus) (tier, why string, ok bool) {
 	limit := 100.0
 	if spec.ScaleUp.UtilizationAbove != nil {
 		limit = float64(*spec.ScaleUp.UtilizationAbove)

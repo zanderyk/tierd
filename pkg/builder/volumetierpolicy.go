@@ -20,16 +20,18 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 
-	tierdv1 "github.com/zanderyk/tierd/api/v1"
+	tierdv1alpha1 "github.com/zanderyk/tierd/api/v1alpha1"
 )
 
-type VolumeTierPolicyBuilder struct{ object *tierdv1.VolumeTierPolicy }
+type VolumeTierPolicyBuilder struct {
+	object *tierdv1alpha1.VolumeTierPolicy
+}
 
 // Application is the constructor for a VolumeTierPolicyBuilder.
 func VolumeTierPolicy(namespace, name string) *VolumeTierPolicyBuilder {
 	return &VolumeTierPolicyBuilder{
-		object: &tierdv1.VolumeTierPolicy{
-			APIVersion: tierdv1.GroupVersion.String(),
+		object: &tierdv1alpha1.VolumeTierPolicy{
+			APIVersion: tierdv1alpha1.GroupVersion.String(),
 			Kind:       "VolumeTierPolicy",
 			Namespace:  namespace,
 			Name:       name,
@@ -38,7 +40,7 @@ func VolumeTierPolicy(namespace, name string) *VolumeTierPolicyBuilder {
 }
 
 // Build returns the built VolumeTierPolicy.
-func (b *VolumeTierPolicyBuilder) Build() *tierdv1.VolumeTierPolicy { return b.object }
+func (b *VolumeTierPolicyBuilder) Build() *tierdv1alpha1.VolumeTierPolicy { return b.object }
 
 // ObjectMeta applies functional options to the Application's ObjectMeta.
 func (b *VolumeTierPolicyBuilder) ObjectMeta(opts ...ObjectMetaOpt) *VolumeTierPolicyBuilder {

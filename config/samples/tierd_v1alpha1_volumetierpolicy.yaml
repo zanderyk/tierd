@@ -1,7 +1,7 @@
 # Moves PVCs labelled app=postgres between two VolumeAttributesClasses.
 # Replace the tier names with VolumeAttributesClasses of your CSI driver,
 # lowest first, and set each tier's ceilings to what it provisions.
-apiVersion: tierd.zanderyk.github.io/v1
+apiVersion: tierd.zanderyk.github.io/v1alpha1
 kind: VolumeTierPolicy
 metadata:
   labels:

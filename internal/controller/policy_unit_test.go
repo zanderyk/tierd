@@ -37,12 +37,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	tierdv1 "github.com/zanderyk/tierd/api/v1"
+	tierdv1alpha1 "github.com/zanderyk/tierd/api/v1alpha1"
 )
 
 func TestValidateTierSpec(t *testing.T) {
-	ceil := func(iops, mibps int64) *tierdv1.Ceiling {
-		c := &tierdv1.Ceiling{}
+	ceil := func(iops, mibps int64) *tierdv1alpha1.Ceiling {
+		c := &tierdv1alpha1.Ceiling{}
 		if iops > 0 {
 			c.IOPS = new(iops)
 		}
@@ -53,23 +53,23 @@ func TestValidateTierSpec(t *testing.T) {
 	}
 	tests := []struct {
 		name  string
-		tiers []tierdv1.Tier
+		tiers []tierdv1alpha1.Tier
 		want  []string // substrings of the error; none means valid
 	}{
-		{"ascending", []tierdv1.Tier{{VACName: "a", Ceilings: ceil(100, 10)}, {VACName: "b", Ceilings: ceil(200, 20)}}, nil},
-		{"without ceilings", []tierdv1.Tier{{VACName: "a"}, {VACName: "b"}}, nil},
+		{"ascending", []tierdv1alpha1.Tier{{VACName: "a", Ceilings: ceil(100, 10)}, {VACName: "b", Ceilings: ceil(200, 20)}}, nil},
+		{"without ceilings", []tierdv1alpha1.Tier{{VACName: "a"}, {VACName: "b"}}, nil},
 		{"metrics compared only where declared",
-			[]tierdv1.Tier{{VACName: "a", Ceilings: ceil(100, 0)}, {VACName: "b", Ceilings: ceil(0, 50)},
+			[]tierdv1alpha1.Tier{{VACName: "a", Ceilings: ceil(100, 0)}, {VACName: "b", Ceilings: ceil(0, 50)},
 				{VACName: "c", Ceilings: ceil(200, 60)}}, nil},
-		{"one tier", []tierdv1.Tier{{VACName: "a"}}, []string{"at least two tiers are required, got 1"}},
-		{"unnamed tier", []tierdv1.Tier{{VACName: "a"}, {}}, []string{"tier 1: name must be set"}},
-		{"duplicate name", []tierdv1.Tier{{VACName: "a"}, {VACName: "a"}}, []string{`tier "a": duplicate name`}},
-		{"empty ceilings", []tierdv1.Tier{{VACName: "a", Ceilings: &tierdv1.Ceiling{}}, {VACName: "b"}},
+		{"one tier", []tierdv1alpha1.Tier{{VACName: "a"}}, []string{"at least two tiers are required, got 1"}},
+		{"unnamed tier", []tierdv1alpha1.Tier{{VACName: "a"}, {}}, []string{"tier 1: name must be set"}},
+		{"duplicate name", []tierdv1alpha1.Tier{{VACName: "a"}, {VACName: "a"}}, []string{`tier "a": duplicate name`}},
+		{"empty ceilings", []tierdv1alpha1.Tier{{VACName: "a", Ceilings: &tierdv1alpha1.Ceiling{}}, {VACName: "b"}},
 			[]string{`tier "a": ceilings must set iops and/or throughputMiBps`}},
-		{"iops not increasing", []tierdv1.Tier{{VACName: "a", Ceilings: ceil(200, 0)}, {VACName: "b", Ceilings: ceil(200, 0)}},
+		{"iops not increasing", []tierdv1alpha1.Tier{{VACName: "a", Ceilings: ceil(200, 0)}, {VACName: "b", Ceilings: ceil(200, 0)}},
 			[]string{`tier "b": iops ceiling 200 must be greater than tier "a" (200)`}},
 		{"every problem reported",
-			[]tierdv1.Tier{{VACName: "a", Ceilings: ceil(0, 20)}, {VACName: "b", Ceilings: ceil(0, 10)}, {VACName: "b"}},
+			[]tierdv1alpha1.Tier{{VACName: "a", Ceilings: ceil(0, 20)}, {VACName: "b", Ceilings: ceil(0, 10)}, {VACName: "b"}},
 			[]string{`tier "b": throughputMiBps ceiling 10 must be greater than tier "a" (20)`, `tier "b": duplicate name`}},
 	}
 	for _, tt := range tests {
@@ -101,13 +101,13 @@ func policyClient(t *testing.T, funcs interceptor.Funcs, objs ...client.Object) 
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
-	if err := tierdv1.AddToScheme(scheme); err != nil {
+	if err := tierdv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
-		WithStatusSubresource(&tierdv1.VolumeTierState{}, &tierdv1.VolumeTierPolicy{}).
-		WithIndex(&tierdv1.VolumeTierPolicy{}, tierVACNameIndex, func(obj client.Object) []string {
-			tiers := obj.(*tierdv1.VolumeTierPolicy).Spec.Tiers
+		WithStatusSubresource(&tierdv1alpha1.VolumeTierState{}, &tierdv1alpha1.VolumeTierPolicy{}).
+		WithIndex(&tierdv1alpha1.VolumeTierPolicy{}, tierVACNameIndex, func(obj client.Object) []string {
+			tiers := obj.(*tierdv1alpha1.VolumeTierPolicy).Spec.Tiers
 			names := make([]string, 0, len(tiers))
 			for _, tier := range tiers {
 				names = append(names, tier.VACName)
@@ -118,10 +118,10 @@ func policyClient(t *testing.T, funcs interceptor.Funcs, objs ...client.Object) 
 }
 
 func TestPoliciesForVAC(t *testing.T) {
-	policy := func(ns, name string, tiers ...string) *tierdv1.VolumeTierPolicy {
-		vtp := &tierdv1.VolumeTierPolicy{Namespace: ns, Name: name}
+	policy := func(ns, name string, tiers ...string) *tierdv1alpha1.VolumeTierPolicy {
+		vtp := &tierdv1alpha1.VolumeTierPolicy{Namespace: ns, Name: name}
 		for _, tier := range tiers {
-			vtp.Spec.Tiers = append(vtp.Spec.Tiers, tierdv1.Tier{VACName: tier})
+			vtp.Spec.Tiers = append(vtp.Spec.Tiers, tierdv1alpha1.Tier{VACName: tier})
 		}
 		return vtp
 	}
@@ -159,9 +159,9 @@ func TestPoliciesForVAC(t *testing.T) {
 
 func TestEnsureVolumeTierState(t *testing.T) {
 	pvc := &corev1.PersistentVolumeClaim{Namespace: testKey.Namespace, Name: testKey.Name, UID: "uid-data"}
-	stateGR := schema.GroupResource{Group: tierdv1.GroupVersion.Group, Resource: "volumetierstates"}
+	stateGR := schema.GroupResource{Group: tierdv1alpha1.GroupVersion.Group, Resource: "volumetierstates"}
 	injected := errors.New("injected")
-	isState := func(obj client.Object) bool { _, ok := obj.(*tierdv1.VolumeTierState); return ok }
+	isState := func(obj client.Object) bool { _, ok := obj.(*tierdv1alpha1.VolumeTierState); return ok }
 
 	t.Run("creates the state owned by the PVC", func(t *testing.T) {
 		c, scheme := policyClient(t, interceptor.Funcs{}, pvc.DeepCopy())
@@ -176,8 +176,8 @@ func TestEnsureVolumeTierState(t *testing.T) {
 	})
 
 	t.Run("fetches a state created concurrently", func(t *testing.T) {
-		existing := &tierdv1.VolumeTierState{Namespace: testKey.Namespace, Name: testKey.Name,
-			Status: tierdv1.VolumeTierStateStatus{PolicyRef: testPolicy}}
+		existing := &tierdv1alpha1.VolumeTierState{Namespace: testKey.Namespace, Name: testKey.Name,
+			Status: tierdv1alpha1.VolumeTierStateStatus{PolicyRef: testPolicy}}
 		missed := false
 		c, scheme := policyClient(t, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch,
 			key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
@@ -219,7 +219,7 @@ func TestEnsureVolumeTierState(t *testing.T) {
 	}
 
 	t.Run("refetch after a concurrent create fails", func(t *testing.T) {
-		existing := &tierdv1.VolumeTierState{Namespace: testKey.Namespace, Name: testKey.Name}
+		existing := &tierdv1alpha1.VolumeTierState{Namespace: testKey.Namespace, Name: testKey.Name}
 		gets := 0
 		c, scheme := policyClient(t, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch,
 			key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
@@ -299,10 +299,10 @@ func TestPVCDriver(t *testing.T) {
 
 func TestNamespacePolicies(t *testing.T) {
 	const ns, appLabel = "ns", "app"
-	policy := func(name string, sel metav1.LabelSelector, tiers ...string) *tierdv1.VolumeTierPolicy {
-		vtp := &tierdv1.VolumeTierPolicy{Namespace: ns, Name: name, Spec: tierdv1.VolumeTierPolicySpec{Selector: sel}}
+	policy := func(name string, sel metav1.LabelSelector, tiers ...string) *tierdv1alpha1.VolumeTierPolicy {
+		vtp := &tierdv1alpha1.VolumeTierPolicy{Namespace: ns, Name: name, Spec: tierdv1alpha1.VolumeTierPolicySpec{Selector: sel}}
 		for _, tier := range tiers {
-			vtp.Spec.Tiers = append(vtp.Spec.Tiers, tierdv1.Tier{VACName: tier})
+			vtp.Spec.Tiers = append(vtp.Spec.Tiers, tierdv1alpha1.Tier{VACName: tier})
 		}
 		return vtp
 	}

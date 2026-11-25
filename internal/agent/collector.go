@@ -38,7 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	tierdv1 "github.com/zanderyk/tierd/api/v1"
+	tierdv1alpha1 "github.com/zanderyk/tierd/api/v1alpha1"
 	"github.com/zanderyk/tierd/internal/agent/procfs"
 )
 
@@ -364,10 +364,10 @@ func (c *Collector) publish(ctx context.Context) {
 // measured is the sample's Measured condition: which figures v's source
 // could report.
 func measured(v volume, s VolumeMetrics) metav1.Condition {
-	cond := metav1.Condition{Type: tierdv1.VolumeIOSampleMeasured, Status: metav1.ConditionTrue}
+	cond := metav1.Condition{Type: tierdv1alpha1.VolumeIOSampleMeasured, Status: metav1.ConditionTrue}
 	if v.kind == kindNone {
 		cond.Status = metav1.ConditionFalse
-		cond.Reason = tierdv1.MeasuredNoSource
+		cond.Reason = tierdv1alpha1.MeasuredNoSource
 		cond.Message = fmt.Sprintf("tierd cannot measure %s volumes", v.mount.FSType)
 		return cond
 	}
@@ -379,10 +379,10 @@ func measured(v volume, s VolumeMetrics) metav1.Condition {
 		missing = append(missing, "utilization")
 	}
 	if len(missing) == 0 {
-		cond.Reason = tierdv1.MeasuredComplete
+		cond.Reason = tierdv1alpha1.MeasuredComplete
 		return cond
 	}
-	cond.Reason = tierdv1.MeasuredPartial
+	cond.Reason = tierdv1alpha1.MeasuredPartial
 	cond.Message = fmt.Sprintf("%s volumes report no %s", v.kind, strings.Join(missing, ", "))
 	return cond
 }
@@ -391,7 +391,7 @@ func measured(v volume, s VolumeMetrics) metav1.Condition {
 // policy: its VolumeTierState exists and has a policyRef. PVCs in conflict
 // between policies have an empty policyRef and are not sampled.
 func (c *Collector) managed(ctx context.Context, cl claim) (bool, error) {
-	state := &tierdv1.VolumeTierState{}
+	state := &tierdv1alpha1.VolumeTierState{}
 	if err := c.Reader.Get(ctx, client.ObjectKey{Namespace: cl.namespace, Name: cl.name}, state); err != nil {
 		return false, client.IgnoreNotFound(err)
 	}
@@ -404,7 +404,7 @@ func (c *Collector) removeSample(ctx context.Context, cl claim, pvName string) {
 	if c.removed[pvName] {
 		return
 	}
-	sample := &tierdv1.VolumeIOSample{Name: cl.name, Namespace: cl.namespace}
+	sample := &tierdv1alpha1.VolumeIOSample{Name: cl.name, Namespace: cl.namespace}
 	err := c.Client.Delete(ctx, sample)
 	if client.IgnoreNotFound(err) != nil {
 		logf.FromContext(ctx).Error(err, "Failed to delete VolumeIOSample of unmanaged PVC",
@@ -505,10 +505,10 @@ const podCgroupDepth = 4
 // writeSample creates the PVC's VolumeIOSample if needed and updates its
 // status.
 func (c *Collector) writeSample(ctx context.Context, cl claim, v volume, s VolumeMetrics, psi *float64) error {
-	sample := &tierdv1.VolumeIOSample{}
+	sample := &tierdv1alpha1.VolumeIOSample{}
 	err := c.Reader.Get(ctx, client.ObjectKey{Namespace: cl.namespace, Name: cl.name}, sample)
 	if apierrors.IsNotFound(err) {
-		sample = &tierdv1.VolumeIOSample{
+		sample = &tierdv1alpha1.VolumeIOSample{
 			Name:      cl.name,
 			Namespace: cl.namespace,
 			OwnerReferences: []metav1.OwnerReference{{
@@ -539,7 +539,7 @@ func (c *Collector) writeSample(ctx context.Context, cl claim, v volume, s Volum
 
 	base := sample.DeepCopy()
 	now := metav1.Now()
-	sample.Status = tierdv1.VolumeIOSampleStatus{
+	sample.Status = tierdv1alpha1.VolumeIOSampleStatus{
 		NodeName:                 c.Config.NodeName,
 		PVName:                   v.pvName,
 		Device:                   v.mount.Device,

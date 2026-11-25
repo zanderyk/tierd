@@ -35,7 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
-	tierdv1 "github.com/zanderyk/tierd/api/v1"
+	tierdv1alpha1 "github.com/zanderyk/tierd/api/v1alpha1"
 )
 
 // modifyPVC is testKey's PVC, on currentTier and asked to move to specTier,
@@ -74,7 +74,7 @@ func TestCheckModify(t *testing.T) {
 	)
 	tests := []struct {
 		name     string
-		mode     tierdv1.VolumeTierPolicyMode
+		mode     tierdv1alpha1.VolumeTierPolicyMode
 		override bool
 		pvc      *corev1.PersistentVolumeClaim
 
@@ -86,41 +86,41 @@ func TestCheckModify(t *testing.T) {
 		wantRollback   bool
 	}{
 		{
-			name: "idle", mode: tierdv1.VolumeTierPolicyModeAct,
+			name: "idle", mode: tierdv1alpha1.VolumeTierPolicyModeAct,
 			pvc:        modifyPVC(tierBase, nil),
 			wantStatus: metav1.ConditionFalse, wantReason: "Idle",
 		},
 		{
-			name: "in progress", mode: tierdv1.VolumeTierPolicyModeAct,
+			name: "in progress", mode: tierdv1alpha1.VolumeTierPolicyModeAct,
 			pvc:        modifyPVC(tierFast, modifying(corev1.PersistentVolumeClaimModifyVolumeInProgress, tierFast)),
 			wantStatus: metav1.ConditionTrue, wantReason: "InProgress", wantMessage: "Moving to " + tierFast,
 		},
 		{
-			name: "pending without a target names the PVC's class", mode: tierdv1.VolumeTierPolicyModeAct,
+			name: "pending without a target names the PVC's class", mode: tierdv1alpha1.VolumeTierPolicyModeAct,
 			pvc:        modifyPVC(tierFast, modifying(corev1.PersistentVolumeClaimModifyVolumePending, "")),
 			wantStatus: metav1.ConditionTrue, wantReason: "Pending", wantMessage: "Moving to " + tierFast,
 		},
 		{
-			name: "infeasible rolls back in act mode", mode: tierdv1.VolumeTierPolicyModeAct,
+			name: "infeasible rolls back in act mode", mode: tierdv1alpha1.VolumeTierPolicyModeAct,
 			pvc:        modifyPVC(tierFast, modifying(corev1.PersistentVolumeClaimModifyVolumeInfeasible, tierFast)),
 			wantStatus: metav1.ConditionFalse, wantReason: failedReason, wantMessage: "Failed to move to " + tierFast,
 			wantInfeasible: tierFast, wantDriverMsg: driverRejected, wantRollback: true,
 		},
 		{
-			name: "infeasible only records in recommend mode", mode: tierdv1.VolumeTierPolicyModeRecommend,
+			name: "infeasible only records in recommend mode", mode: tierdv1alpha1.VolumeTierPolicyModeRecommend,
 			pvc:        modifyPVC(tierFast, modifying(corev1.PersistentVolumeClaimModifyVolumeInfeasible, tierFast)),
 			wantStatus: metav1.ConditionFalse, wantReason: failedReason, wantMessage: "Failed to move to " + tierFast,
 			wantInfeasible: tierFast, wantDriverMsg: driverRejected,
 		},
 		{
-			name: "infeasible under manual override is not rolled back", mode: tierdv1.VolumeTierPolicyModeAct,
+			name: "infeasible under manual override is not rolled back", mode: tierdv1alpha1.VolumeTierPolicyModeAct,
 			override:   true,
 			pvc:        modifyPVC(tierFast, modifying(corev1.PersistentVolumeClaimModifyVolumeInfeasible, tierFast)),
 			wantStatus: metav1.ConditionFalse, wantReason: failedReason, wantMessage: "Failed to move to " + tierFast,
 			wantInfeasible: tierFast, wantDriverMsg: driverRejected,
 		},
 		{
-			name: "modify error while in progress is a failure", mode: tierdv1.VolumeTierPolicyModeAct,
+			name: "modify error while in progress is a failure", mode: tierdv1alpha1.VolumeTierPolicyModeAct,
 			pvc: modifyPVC(tierFast, modifying(corev1.PersistentVolumeClaimModifyVolumeInProgress, tierFast),
 				modifyError(driverMsg)),
 			wantStatus: metav1.ConditionFalse, wantReason: failedReason, wantMessage: "Failed to move to " + tierFast,
@@ -128,7 +128,7 @@ func TestCheckModify(t *testing.T) {
 		},
 		{
 			// The error is about a move back to the tier the volume is on.
-			name: "modify error targeting the current tier is still in progress", mode: tierdv1.VolumeTierPolicyModeAct,
+			name: "modify error targeting the current tier is still in progress", mode: tierdv1alpha1.VolumeTierPolicyModeAct,
 			pvc: modifyPVC(tierBase, modifying(corev1.PersistentVolumeClaimModifyVolumeInProgress, tierBase),
 				modifyError(driverMsg)),
 			wantStatus: metav1.ConditionTrue, wantReason: "InProgress", wantMessage: "Moving to " + tierBase,
@@ -136,13 +136,13 @@ func TestCheckModify(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			vtp := &tierdv1.VolumeTierPolicy{
+			vtp := &tierdv1alpha1.VolumeTierPolicy{
 				Namespace: testKey.Namespace, Name: testPolicy,
-				Spec: tierdv1.VolumeTierPolicySpec{Mode: tt.mode},
+				Spec: tierdv1alpha1.VolumeTierPolicySpec{Mode: tt.mode},
 			}
-			vts := &tierdv1.VolumeTierState{
+			vts := &tierdv1alpha1.VolumeTierState{
 				Namespace: testKey.Namespace, Name: testKey.Name,
-				Status: tierdv1.VolumeTierStateStatus{PolicyRef: testPolicy, CurrentTier: tierBase},
+				Status: tierdv1alpha1.VolumeTierStateStatus{PolicyRef: testPolicy, CurrentTier: tierBase},
 			}
 			if tt.override {
 				setCondition(vts, ConditionVTSManualOverride, metav1.ConditionTrue, "Annotated", "")
@@ -195,7 +195,7 @@ func TestCheckModifyErrors(t *testing.T) {
 	pvc := func() *corev1.PersistentVolumeClaim {
 		return modifyPVC(tierFast, modifying(corev1.PersistentVolumeClaimModifyVolumeInfeasible, tierFast))
 	}
-	vtp := &tierdv1.VolumeTierPolicy{Spec: tierdv1.VolumeTierPolicySpec{Mode: tierdv1.VolumeTierPolicyModeAct}}
+	vtp := &tierdv1alpha1.VolumeTierPolicy{Spec: tierdv1alpha1.VolumeTierPolicySpec{Mode: tierdv1alpha1.VolumeTierPolicyModeAct}}
 	tests := []struct {
 		name  string
 		funcs interceptor.Funcs
@@ -217,7 +217,7 @@ func TestCheckModifyErrors(t *testing.T) {
 			p := pvc()
 			c, rec := modifyClient(t, tt.funcs, p)
 			r := &VolumeTierStateReconciler{Client: c, Recorder: rec}
-			vts := &tierdv1.VolumeTierState{Status: tierdv1.VolumeTierStateStatus{CurrentTier: tierBase}}
+			vts := &tierdv1alpha1.VolumeTierState{Status: tierdv1alpha1.VolumeTierStateStatus{CurrentTier: tierBase}}
 			if err := r.checkModify(t.Context(), vtp, vts, p); !errors.Is(err, injected) {
 				t.Errorf("checkModify = %v, want the injected error", err)
 			}
@@ -231,8 +231,8 @@ func TestCheckModifyWithoutClass(t *testing.T) {
 	p := modifyPVC(tierFast, modifying(corev1.PersistentVolumeClaimModifyVolumeInfeasible, tierFast))
 	c, rec := modifyClient(t, interceptor.Funcs{}, p)
 	r := &VolumeTierStateReconciler{Client: c, Recorder: rec}
-	vtp := &tierdv1.VolumeTierPolicy{Spec: tierdv1.VolumeTierPolicySpec{Mode: tierdv1.VolumeTierPolicyModeRecommend}}
-	vts := &tierdv1.VolumeTierState{Status: tierdv1.VolumeTierStateStatus{CurrentTier: tierBase}}
+	vtp := &tierdv1alpha1.VolumeTierPolicy{Spec: tierdv1alpha1.VolumeTierPolicySpec{Mode: tierdv1alpha1.VolumeTierPolicyModeRecommend}}
+	vts := &tierdv1alpha1.VolumeTierState{Status: tierdv1alpha1.VolumeTierStateStatus{CurrentTier: tierBase}}
 
 	if err := r.checkModify(t.Context(), vtp, vts, p); err != nil {
 		t.Fatal(err)
@@ -249,29 +249,29 @@ func modifyClient(t *testing.T, funcs interceptor.Funcs, objs ...client.Object) 
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
-	if err := tierdv1.AddToScheme(scheme); err != nil {
+	if err := tierdv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
-		WithStatusSubresource(&tierdv1.VolumeTierState{}).Build()
+		WithStatusSubresource(&tierdv1alpha1.VolumeTierState{}).Build()
 	return interceptor.NewClient(c, funcs), events.NewFakeRecorder(10)
 }
 
 func TestEvaluate(t *testing.T) {
-	vtp := &tierdv1.VolumeTierPolicy{Spec: tierdv1.VolumeTierPolicySpec{
-		Tiers: []tierdv1.Tier{
-			{VACName: tierBase, Ceilings: &tierdv1.Ceiling{IOPS: new(int64(1000))}},
-			{VACName: tierFast, Ceilings: &tierdv1.Ceiling{IOPS: new(int64(5000))}},
+	vtp := &tierdv1alpha1.VolumeTierPolicy{Spec: tierdv1alpha1.VolumeTierPolicySpec{
+		Tiers: []tierdv1alpha1.Tier{
+			{VACName: tierBase, Ceilings: &tierdv1alpha1.Ceiling{IOPS: new(int64(1000))}},
+			{VACName: tierFast, Ceilings: &tierdv1alpha1.Ceiling{IOPS: new(int64(5000))}},
 		},
-		ScaleUp: tierdv1.ScaleUp{UtilizationAbove: new(int32(80))},
+		ScaleUp: tierdv1alpha1.ScaleUp{UtilizationAbove: new(int32(80))},
 	}}
-	busy := &tierdv1.VolumeIOSample{Status: tierdv1.VolumeIOSampleStatus{IOPS: 900}}
+	busy := &tierdv1alpha1.VolumeIOSample{Status: tierdv1alpha1.VolumeIOSampleStatus{IOPS: 900}}
 	r := &VolumeTierStateReconciler{}
 
-	if dir, why := r.Evaluate(vtp, tierBase, busy); dir != tierdv1.ScaleDirectionUp {
+	if dir, why := r.Evaluate(vtp, tierBase, busy); dir != tierdv1alpha1.ScaleDirectionUp {
 		t.Errorf("Evaluate on base at 90%% = %s (%s), want up", dir, why)
 	}
-	if dir, why := r.Evaluate(vtp, "other", busy); dir != tierdv1.ScaleDirectionNone || why != "current tier is not in the policy" {
+	if dir, why := r.Evaluate(vtp, "other", busy); dir != tierdv1alpha1.ScaleDirectionNone || why != "current tier is not in the policy" {
 		t.Errorf("Evaluate on a tier outside the policy = %s (%s), want none", dir, why)
 	}
 }

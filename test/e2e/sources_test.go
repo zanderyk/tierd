@@ -28,7 +28,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	tierdv1 "github.com/zanderyk/tierd/api/v1"
+	tierdv1alpha1 "github.com/zanderyk/tierd/api/v1alpha1"
 	"github.com/zanderyk/tierd/internal/controller"
 )
 
@@ -86,7 +86,7 @@ var _ = Describe("Measurement sources", Ordered, Label("sources"), func() {
 	for _, s := range profile.Sources {
 		It("measures the "+s.Name+" volume", func() {
 			Eventually(func() string {
-				return condition(getSample(sourcesNS, s.Name).Status.Conditions, tierdv1.VolumeIOSampleMeasured).Reason
+				return condition(getSample(sourcesNS, s.Name).Status.Conditions, tierdv1alpha1.VolumeIOSampleMeasured).Reason
 			}).Should(Equal(s.Measured))
 			Eventually(func() int64 { return getSample(sourcesNS, s.Name).Status.IOPS }).Should(BeNumerically(">", 0))
 			Eventually(func() metav1.ConditionStatus {
@@ -96,7 +96,7 @@ var _ = Describe("Measurement sources", Ordered, Label("sources"), func() {
 				Expect(getSample(sourcesNS, s.Name).Status.LatencyP95Micros).NotTo(BeNil(), "latency")
 			}
 
-			if s.Mode == tierdv1.VolumeTierPolicyModeAct {
+			if s.Mode == tierdv1alpha1.VolumeTierPolicyModeAct {
 				By("waiting for the PVC to move to " + s.Fast.Name)
 				Eventually(func() string { return currentTier(sourcesNS, s.Name) }).Should(Equal(s.Fast.Name))
 			} else {

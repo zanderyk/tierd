@@ -42,7 +42,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	tierdv1 "github.com/zanderyk/tierd/api/v1"
+	tierdv1alpha1 "github.com/zanderyk/tierd/api/v1alpha1"
 )
 
 type VTPConditionType string
@@ -110,7 +110,7 @@ func (r *VolumeTierPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	logger.V(2).Info("Starting Reconcile for VolumeTierPolicy")
 	defer logger.V(2).Info("VolumeTierPolicy reconcile ended")
 
-	vtp := &tierdv1.VolumeTierPolicy{}
+	vtp := &tierdv1alpha1.VolumeTierPolicy{}
 	if err := r.Get(ctx, req.NamespacedName, vtp); err != nil {
 		if !apierrors.IsNotFound(err) {
 			logger.Error(err, "Failed to get VolumeTierPolicy", "name", req.Name)
@@ -120,7 +120,7 @@ func (r *VolumeTierPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	if !vtp.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(vtp, finalizerName) {
-			states := &tierdv1.VolumeTierStateList{}
+			states := &tierdv1alpha1.VolumeTierStateList{}
 			if err := r.List(ctx, states, client.InNamespace(vtp.Namespace),
 				client.MatchingFields{statePolicyRefIndex: vtp.Name}); err != nil {
 				return ctrl.Result{}, err
@@ -223,7 +223,7 @@ func (r *VolumeTierPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	slices.Sort(matched)
 
 	// remove the VTS that are no longer covered by the labelSelector above
-	states := &tierdv1.VolumeTierStateList{}
+	states := &tierdv1alpha1.VolumeTierStateList{}
 	if err := r.List(ctx, states, client.InNamespace(vtp.Namespace),
 		client.MatchingFields{statePolicyRefIndex: vtp.Name}); err != nil {
 		return ctrl.Result{}, err
@@ -254,8 +254,8 @@ func (r *VolumeTierPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 // ensureVolumeTierState creates the VolumeTierState for a PVC if it does not
 // exist.
-func (r *VolumeTierPolicyReconciler) ensureVolumeTierState(ctx context.Context, pvc *corev1.PersistentVolumeClaim) (*tierdv1.VolumeTierState, error) {
-	state := &tierdv1.VolumeTierState{}
+func (r *VolumeTierPolicyReconciler) ensureVolumeTierState(ctx context.Context, pvc *corev1.PersistentVolumeClaim) (*tierdv1alpha1.VolumeTierState, error) {
+	state := &tierdv1alpha1.VolumeTierState{}
 	err := r.Get(ctx, client.ObjectKeyFromObject(pvc), state)
 	if err == nil {
 		return state, nil
@@ -264,7 +264,7 @@ func (r *VolumeTierPolicyReconciler) ensureVolumeTierState(ctx context.Context, 
 		return nil, fmt.Errorf("cannot get VolumeTierState %s: %w", pvc.Name, err)
 	}
 
-	state = &tierdv1.VolumeTierState{Name: pvc.Name, Namespace: pvc.Namespace}
+	state = &tierdv1alpha1.VolumeTierState{Name: pvc.Name, Namespace: pvc.Namespace}
 	if err := controllerutil.SetOwnerReference(pvc, state, r.Scheme); err != nil {
 		return nil, fmt.Errorf("cannot set owner reference on VolumeTierState %s: %w", pvc.Name, err)
 	}
@@ -283,7 +283,7 @@ func (r *VolumeTierPolicyReconciler) ensureVolumeTierState(ctx context.Context, 
 }
 
 // setPolicyRef records in status which policy manages the state's PVC
-func (r *VolumeTierPolicyReconciler) setPolicyRef(ctx context.Context, state *tierdv1.VolumeTierState, ref string) error {
+func (r *VolumeTierPolicyReconciler) setPolicyRef(ctx context.Context, state *tierdv1alpha1.VolumeTierState, ref string) error {
 	if state.Status.PolicyRef == ref {
 		return nil
 	}
@@ -307,10 +307,10 @@ type policyMatch struct {
 // missing first tier VAC are skipped; they match no PVCs.
 func (r *VolumeTierPolicyReconciler) namespacePolicies(
 	ctx context.Context,
-	vtp *tierdv1.VolumeTierPolicy,
+	vtp *tierdv1alpha1.VolumeTierPolicy,
 	own policyMatch,
 ) (map[string]policyMatch, error) {
-	policies := &tierdv1.VolumeTierPolicyList{}
+	policies := &tierdv1alpha1.VolumeTierPolicyList{}
 	if err := r.List(ctx, policies, client.InNamespace(vtp.Namespace)); err != nil {
 		return nil, fmt.Errorf("cannot list VolumeTierPolicies: %w", err)
 	}
@@ -377,7 +377,7 @@ func (r *VolumeTierPolicyReconciler) pvcDriver(ctx context.Context, pvc *corev1.
 	return pv.Spec.CSI.Driver, nil
 }
 
-func setConflict(vtp *tierdv1.VolumeTierPolicy, conflicts []string) {
+func setConflict(vtp *tierdv1alpha1.VolumeTierPolicy, conflicts []string) {
 	cond := metav1.Condition{
 		Type:               string(ConditionVTPConflict),
 		Status:             metav1.ConditionFalse,
@@ -393,7 +393,7 @@ func setConflict(vtp *tierdv1.VolumeTierPolicy, conflicts []string) {
 	meta.SetStatusCondition(&vtp.Status.Conditions, cond)
 }
 
-func setReady(vtp *tierdv1.VolumeTierPolicy, status metav1.ConditionStatus, reason VTPConditionReason, msg string) {
+func setReady(vtp *tierdv1alpha1.VolumeTierPolicy, status metav1.ConditionStatus, reason VTPConditionReason, msg string) {
 	meta.SetStatusCondition(&vtp.Status.Conditions, metav1.Condition{
 		Type:               string(ConditionVTPReady),
 		Status:             status,
@@ -406,7 +406,7 @@ func setReady(vtp *tierdv1.VolumeTierPolicy, status metav1.ConditionStatus, reas
 // patchStatus sends only the status fields changed since base. This
 // controller is the only writer of the policy's status, so a merge patch
 // without optimistic locking is safe.
-func (r *VolumeTierPolicyReconciler) patchStatus(ctx context.Context, vtp, base *tierdv1.VolumeTierPolicy) error {
+func (r *VolumeTierPolicyReconciler) patchStatus(ctx context.Context, vtp, base *tierdv1alpha1.VolumeTierPolicy) error {
 	if err := r.Status().Patch(ctx, vtp, client.MergeFrom(base)); err != nil {
 		logf.FromContext(ctx).Error(err, "Failed to patch VolumeTierPolicy status")
 		return fmt.Errorf("cannot patch VTP status: %w", err)
@@ -418,7 +418,7 @@ func (r *VolumeTierPolicyReconciler) patchStatus(ctx context.Context, vtp, base 
 // VolumeAttributesClasses they name, and returns the tiers' CSI driver.
 // Problems the user must fix are returned as *tierError; any other error is
 // an API failure and should be retried.
-func (r *VolumeTierPolicyReconciler) validateTiers(ctx context.Context, tiers []tierdv1.Tier) (string, error) {
+func (r *VolumeTierPolicyReconciler) validateTiers(ctx context.Context, tiers []tierdv1alpha1.Tier) (string, error) {
 	if err := validateTierSpec(tiers); err != nil {
 		return "", &tierError{reason: VTPConditionReasonInvalidTiers, err: err}
 	}
@@ -429,7 +429,7 @@ func (r *VolumeTierPolicyReconciler) validateTiers(ctx context.Context, tiers []
 // they all use the same CSI driver, and returns that driver. Reads come from
 // the informer cache; a VAC created after a NotFound is picked up through the
 // VAC watch.
-func (r *VolumeTierPolicyReconciler) validateVolumeAttributesClasses(ctx context.Context, tiers []tierdv1.Tier) (string, error) {
+func (r *VolumeTierPolicyReconciler) validateVolumeAttributesClasses(ctx context.Context, tiers []tierdv1alpha1.Tier) (string, error) {
 	var missing []string
 	drivers := make(map[string][]string) // driverName -> tier names
 	for _, tier := range tiers {
@@ -471,7 +471,7 @@ func (r *VolumeTierPolicyReconciler) validateVolumeAttributesClasses(ctx context
 // tiers, unique non-empty names, and ceilings that strictly increase from the
 // first (lowest) tier to the last (highest), per metric. Tiers that do not
 // declare a metric are skipped when comparing that metric.
-func validateTierSpec(tiers []tierdv1.Tier) error {
+func validateTierSpec(tiers []tierdv1alpha1.Tier) error {
 	var errs []error
 
 	if len(tiers) < 2 {
@@ -520,7 +520,7 @@ func validateTierSpec(tiers []tierdv1.Tier) error {
 // policiesForVAC maps a VolumeAttributesClass event to every policy that
 // names it as a tier.
 func (r *VolumeTierPolicyReconciler) policiesForVAC(ctx context.Context, obj client.Object) []reconcile.Request {
-	policies := &tierdv1.VolumeTierPolicyList{}
+	policies := &tierdv1alpha1.VolumeTierPolicyList{}
 	if err := r.List(ctx, policies, client.MatchingFields{tierVACNameIndex: obj.GetName()}); err != nil {
 		logf.FromContext(ctx).Error(err, "Failed to list VolumeTierPolicies for VolumeAttributesClass", "name", obj.GetName())
 		return nil
@@ -533,7 +533,7 @@ func (r *VolumeTierPolicyReconciler) policiesForVAC(ctx context.Context, obj cli
 }
 
 func (r *VolumeTierPolicyReconciler) policiesInNamespace(ctx context.Context, obj client.Object) []reconcile.Request {
-	policies := &tierdv1.VolumeTierPolicyList{}
+	policies := &tierdv1alpha1.VolumeTierPolicyList{}
 	if err := r.List(ctx, policies, client.InNamespace(obj.GetNamespace())); err != nil {
 		return nil
 	}
@@ -546,9 +546,9 @@ func (r *VolumeTierPolicyReconciler) policiesInNamespace(ctx context.Context, ob
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *VolumeTierPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &tierdv1.VolumeTierPolicy{}, tierVACNameIndex,
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &tierdv1alpha1.VolumeTierPolicy{}, tierVACNameIndex,
 		func(obj client.Object) []string {
-			vtp := obj.(*tierdv1.VolumeTierPolicy)
+			vtp := obj.(*tierdv1alpha1.VolumeTierPolicy)
 			names := make([]string, 0, len(vtp.Spec.Tiers))
 			for _, t := range vtp.Spec.Tiers {
 				names = append(names, t.VACName)
@@ -559,12 +559,12 @@ func (r *VolumeTierPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&tierdv1.VolumeTierPolicy{}).
+		For(&tierdv1alpha1.VolumeTierPolicy{}).
 		Watches(&corev1.PersistentVolumeClaim{}, handler.EnqueueRequestsFromMapFunc(r.policiesInNamespace)).
-		Watches(&tierdv1.VolumeTierPolicy{},
+		Watches(&tierdv1alpha1.VolumeTierPolicy{},
 			handler.EnqueueRequestsFromMapFunc(r.policiesInNamespace),
 			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
-		Watches(&tierdv1.VolumeTierState{},
+		Watches(&tierdv1alpha1.VolumeTierState{},
 			handler.EnqueueRequestsFromMapFunc(r.policiesInNamespace)).
 		Watches(&storagev1.VolumeAttributesClass{}, handler.EnqueueRequestsFromMapFunc(r.policiesForVAC)).
 		Named("volumetierpolicy").

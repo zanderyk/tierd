@@ -34,7 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	zanderykgithubiov1 "github.com/zanderyk/tierd/api/v1"
+	zanderykgithubiov1alpha1 "github.com/zanderyk/tierd/api/v1alpha1"
 	"github.com/zanderyk/tierd/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
@@ -47,7 +47,7 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
-	utilruntime.Must(zanderykgithubiov1.AddToScheme(scheme))
+	utilruntime.Must(zanderykgithubiov1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 

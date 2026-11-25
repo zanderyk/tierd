@@ -35,7 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	tierdv1 "github.com/zanderyk/tierd/api/v1"
+	tierdv1alpha1 "github.com/zanderyk/tierd/api/v1alpha1"
 )
 
 const (
@@ -45,35 +45,35 @@ const (
 
 func TestWantDirection(t *testing.T) {
 	// Same shape as hack/aks-smoke/policy.yaml.
-	spec := tierdv1.VolumeTierPolicySpec{
-		Tiers: []tierdv1.Tier{
-			{VACName: tierBase, Ceilings: &tierdv1.Ceiling{IOPS: new(int64(3000)), ThroughputMiBPS: new(int64(125))}},
-			{VACName: tierFast, Ceilings: &tierdv1.Ceiling{IOPS: new(int64(5000)), ThroughputMiBPS: new(int64(200))}},
+	spec := tierdv1alpha1.VolumeTierPolicySpec{
+		Tiers: []tierdv1alpha1.Tier{
+			{VACName: tierBase, Ceilings: &tierdv1alpha1.Ceiling{IOPS: new(int64(3000)), ThroughputMiBPS: new(int64(125))}},
+			{VACName: tierFast, Ceilings: &tierdv1alpha1.Ceiling{IOPS: new(int64(5000)), ThroughputMiBPS: new(int64(200))}},
 		},
-		ScaleUp: tierdv1.ScaleUp{
+		ScaleUp: tierdv1alpha1.ScaleUp{
 			IOPressureAbove:   new(int32(20)),
 			LatencyP95AboveMs: new(int64(20)),
 			UtilizationAbove:  new(int32(80)),
 		},
-		ScaleDown: &tierdv1.ScaleDown{UtilizationBelow: 30, IOPressureBelow: new(int32(1))},
+		ScaleDown: &tierdv1alpha1.ScaleDown{UtilizationBelow: 30, IOPressureBelow: new(int32(1))},
 	}
 	psi := func(v string) *resource.Quantity { return new(resource.MustParse(v)) }
 
 	tests := []struct {
 		name   string
 		tier   int
-		sample tierdv1.VolumeIOSampleStatus
-		want   tierdv1.ScaleDirection
+		sample tierdv1alpha1.VolumeIOSampleStatus
+		want   tierdv1alpha1.ScaleDirection
 	}{
-		{"idle on base stays", 0, tierdv1.VolumeIOSampleStatus{IOPS: 10, IOPressureSomeAvg60: psi("0")}, tierdv1.ScaleDirectionNone},
-		{"iops near base ceiling", 0, tierdv1.VolumeIOSampleStatus{IOPS: 3060}, tierdv1.ScaleDirectionUp},
-		{"throughput near base ceiling", 0, tierdv1.VolumeIOSampleStatus{ThroughputBytesPerSecond: 110 << 20}, tierdv1.ScaleDirectionUp},
-		{"high latency", 0, tierdv1.VolumeIOSampleStatus{LatencyP95Micros: new(int64(25_000))}, tierdv1.ScaleDirectionUp},
-		{"high pressure", 0, tierdv1.VolumeIOSampleStatus{IOPressureSomeAvg60: psi("35")}, tierdv1.ScaleDirectionUp},
-		{"busy on top tier stays", 1, tierdv1.VolumeIOSampleStatus{IOPS: 4900}, tierdv1.ScaleDirectionNone},
-		{"quiet on fast goes down", 1, tierdv1.VolumeIOSampleStatus{IOPS: 300, IOPressureSomeAvg60: psi("0")}, tierdv1.ScaleDirectionDown},
-		{"too busy for base stays", 1, tierdv1.VolumeIOSampleStatus{IOPS: 2000, IOPressureSomeAvg60: psi("0")}, tierdv1.ScaleDirectionNone},
-		{"unknown pressure blocks down", 1, tierdv1.VolumeIOSampleStatus{IOPS: 300}, tierdv1.ScaleDirectionNone},
+		{"idle on base stays", 0, tierdv1alpha1.VolumeIOSampleStatus{IOPS: 10, IOPressureSomeAvg60: psi("0")}, tierdv1alpha1.ScaleDirectionNone},
+		{"iops near base ceiling", 0, tierdv1alpha1.VolumeIOSampleStatus{IOPS: 3060}, tierdv1alpha1.ScaleDirectionUp},
+		{"throughput near base ceiling", 0, tierdv1alpha1.VolumeIOSampleStatus{ThroughputBytesPerSecond: 110 << 20}, tierdv1alpha1.ScaleDirectionUp},
+		{"high latency", 0, tierdv1alpha1.VolumeIOSampleStatus{LatencyP95Micros: new(int64(25_000))}, tierdv1alpha1.ScaleDirectionUp},
+		{"high pressure", 0, tierdv1alpha1.VolumeIOSampleStatus{IOPressureSomeAvg60: psi("35")}, tierdv1alpha1.ScaleDirectionUp},
+		{"busy on top tier stays", 1, tierdv1alpha1.VolumeIOSampleStatus{IOPS: 4900}, tierdv1alpha1.ScaleDirectionNone},
+		{"quiet on fast goes down", 1, tierdv1alpha1.VolumeIOSampleStatus{IOPS: 300, IOPressureSomeAvg60: psi("0")}, tierdv1alpha1.ScaleDirectionDown},
+		{"too busy for base stays", 1, tierdv1alpha1.VolumeIOSampleStatus{IOPS: 2000, IOPressureSomeAvg60: psi("0")}, tierdv1alpha1.ScaleDirectionNone},
+		{"unknown pressure blocks down", 1, tierdv1alpha1.VolumeIOSampleStatus{IOPS: 300}, tierdv1alpha1.ScaleDirectionNone},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -86,28 +86,28 @@ func TestWantDirection(t *testing.T) {
 }
 
 func TestRecommend(t *testing.T) {
-	spec := tierdv1.VolumeTierPolicySpec{
-		Tiers:     []tierdv1.Tier{{VACName: tierBase}, {VACName: tierFast}},
-		ScaleUp:   tierdv1.ScaleUp{For: metav1.Duration{Duration: 10 * time.Minute}},
-		ScaleDown: &tierdv1.ScaleDown{For: metav1.Duration{Duration: time.Hour}},
+	spec := tierdv1alpha1.VolumeTierPolicySpec{
+		Tiers:     []tierdv1alpha1.Tier{{VACName: tierBase}, {VACName: tierFast}},
+		ScaleUp:   tierdv1alpha1.ScaleUp{For: metav1.Duration{Duration: 10 * time.Minute}},
+		ScaleDown: &tierdv1alpha1.ScaleDown{For: metav1.Duration{Duration: time.Hour}},
 	}
 	start := time.Date(2026, 11, 19, 10, 0, 0, 0, time.UTC)
 	at := func(m int) time.Time { return start.Add(time.Duration(m) * time.Minute) }
 
 	// One PVC on tierBase, fed a sequence of directions over time.
-	st := &tierdv1.VolumeTierStateStatus{CurrentTier: tierBase}
+	st := &tierdv1alpha1.VolumeTierStateStatus{CurrentTier: tierBase}
 	steps := []struct {
 		name      string
 		minute    int
-		dir       tierdv1.ScaleDirection
+		dir       tierdv1alpha1.ScaleDirection
 		wantTier  string
 		wantAfter time.Duration
 	}{
-		{"load starts: stopwatch starts", 0, tierdv1.ScaleDirectionUp, tierBase, 10 * time.Minute},
-		{"still loaded, window not over", 4, tierdv1.ScaleDirectionUp, tierBase, 6 * time.Minute},
-		{"load drops: stopwatch resets", 5, tierdv1.ScaleDirectionNone, tierBase, 0},
-		{"load returns: starts again", 6, tierdv1.ScaleDirectionUp, tierBase, 10 * time.Minute},
-		{"held for the full window", 16, tierdv1.ScaleDirectionUp, tierFast, 0},
+		{"load starts: stopwatch starts", 0, tierdv1alpha1.ScaleDirectionUp, tierBase, 10 * time.Minute},
+		{"still loaded, window not over", 4, tierdv1alpha1.ScaleDirectionUp, tierBase, 6 * time.Minute},
+		{"load drops: stopwatch resets", 5, tierdv1alpha1.ScaleDirectionNone, tierBase, 0},
+		{"load returns: starts again", 6, tierdv1alpha1.ScaleDirectionUp, tierBase, 10 * time.Minute},
+		{"held for the full window", 16, tierdv1alpha1.ScaleDirectionUp, tierFast, 0},
 	}
 	for _, s := range steps {
 		after := recommend(st, spec, s.dir, "busy", at(s.minute))
@@ -122,30 +122,30 @@ func TestRecommend(t *testing.T) {
 }
 
 func TestRecommendDownUsesScaleDownWindow(t *testing.T) {
-	spec := tierdv1.VolumeTierPolicySpec{
-		Tiers:     []tierdv1.Tier{{VACName: tierBase}, {VACName: tierFast}},
-		ScaleUp:   tierdv1.ScaleUp{For: metav1.Duration{Duration: 10 * time.Minute}},
-		ScaleDown: &tierdv1.ScaleDown{For: metav1.Duration{Duration: time.Hour}},
+	spec := tierdv1alpha1.VolumeTierPolicySpec{
+		Tiers:     []tierdv1alpha1.Tier{{VACName: tierBase}, {VACName: tierFast}},
+		ScaleUp:   tierdv1alpha1.ScaleUp{For: metav1.Duration{Duration: 10 * time.Minute}},
+		ScaleDown: &tierdv1alpha1.ScaleDown{For: metav1.Duration{Duration: time.Hour}},
 	}
 	now := time.Date(2026, 11, 19, 10, 0, 0, 0, time.UTC)
-	st := &tierdv1.VolumeTierStateStatus{CurrentTier: tierFast}
+	st := &tierdv1alpha1.VolumeTierStateStatus{CurrentTier: tierFast}
 
-	recommend(st, spec, tierdv1.ScaleDirectionDown, "idle", now)
-	if after := recommend(st, spec, tierdv1.ScaleDirectionDown, "idle", now.Add(30*time.Minute)); after != 30*time.Minute {
+	recommend(st, spec, tierdv1alpha1.ScaleDirectionDown, "idle", now)
+	if after := recommend(st, spec, tierdv1alpha1.ScaleDirectionDown, "idle", now.Add(30*time.Minute)); after != 30*time.Minute {
 		t.Errorf("after 30m of a 1h window: requeue %v, want 30m", after)
 	}
-	recommend(st, spec, tierdv1.ScaleDirectionDown, "idle", now.Add(time.Hour))
+	recommend(st, spec, tierdv1alpha1.ScaleDirectionDown, "idle", now.Add(time.Hour))
 	if st.RecommendedTier != tierBase {
 		t.Errorf("RecommendedTier = %q, want base", st.RecommendedTier)
 	}
 }
 
 func TestShouldAct(t *testing.T) {
-	policy := func(mode tierdv1.VolumeTierPolicyMode) *tierdv1.VolumeTierPolicy {
-		return &tierdv1.VolumeTierPolicy{Spec: tierdv1.VolumeTierPolicySpec{Mode: mode}}
+	policy := func(mode tierdv1alpha1.VolumeTierPolicyMode) *tierdv1alpha1.VolumeTierPolicy {
+		return &tierdv1alpha1.VolumeTierPolicy{Spec: tierdv1alpha1.VolumeTierPolicySpec{Mode: mode}}
 	}
-	state := func(current, recommended string) *tierdv1.VolumeTierState {
-		return &tierdv1.VolumeTierState{Status: tierdv1.VolumeTierStateStatus{
+	state := func(current, recommended string) *tierdv1alpha1.VolumeTierState {
+		return &tierdv1alpha1.VolumeTierState{Status: tierdv1alpha1.VolumeTierStateStatus{
 			CurrentTier: current, RecommendedTier: recommended,
 		}}
 	}
@@ -154,16 +154,16 @@ func TestShouldAct(t *testing.T) {
 			VolumeAttributesClassName: &specVAC,
 		}}
 	}
-	overridden := func(vts *tierdv1.VolumeTierState) *tierdv1.VolumeTierState {
+	overridden := func(vts *tierdv1alpha1.VolumeTierState) *tierdv1alpha1.VolumeTierState {
 		vts.Status.Conditions = []metav1.Condition{{Type: ConditionVTSManualOverride, Status: metav1.ConditionTrue}}
 		return vts
 	}
-	act, rec := tierdv1.VolumeTierPolicyModeAct, tierdv1.VolumeTierPolicyModeRecommend
+	act, rec := tierdv1alpha1.VolumeTierPolicyModeAct, tierdv1alpha1.VolumeTierPolicyModeRecommend
 
 	tests := []struct {
 		name   string
-		policy *tierdv1.VolumeTierPolicy
-		state  *tierdv1.VolumeTierState
+		policy *tierdv1alpha1.VolumeTierPolicy
+		state  *tierdv1alpha1.VolumeTierState
 		pvc    *corev1.PersistentVolumeClaim
 		want   bool
 	}{
@@ -184,15 +184,15 @@ func TestShouldAct(t *testing.T) {
 }
 
 func TestShouldActWaitsOutInfeasibleBackoff(t *testing.T) {
-	act := &tierdv1.VolumeTierPolicy{Spec: tierdv1.VolumeTierPolicySpec{Mode: tierdv1.VolumeTierPolicyModeAct}}
+	act := &tierdv1alpha1.VolumeTierPolicy{Spec: tierdv1alpha1.VolumeTierPolicySpec{Mode: tierdv1alpha1.VolumeTierPolicyModeAct}}
 	pvc := &corev1.PersistentVolumeClaim{Spec: corev1.PersistentVolumeClaimSpec{
 		VolumeAttributesClassName: new(tierBase),
 	}}
-	state := func(retryAfter time.Time) *tierdv1.VolumeTierState {
-		return &tierdv1.VolumeTierState{Status: tierdv1.VolumeTierStateStatus{
+	state := func(retryAfter time.Time) *tierdv1alpha1.VolumeTierState {
+		return &tierdv1alpha1.VolumeTierState{Status: tierdv1alpha1.VolumeTierStateStatus{
 			CurrentTier:     tierBase,
 			RecommendedTier: tierFast,
-			InfeasibleTiers: []tierdv1.InfeasibleTier{{Name: tierFast, RetryAfter: metav1.NewTime(retryAfter)}},
+			InfeasibleTiers: []tierdv1alpha1.InfeasibleTier{{Name: tierFast, RetryAfter: metav1.NewTime(retryAfter)}},
 		}}
 	}
 
@@ -206,7 +206,7 @@ func TestShouldActWaitsOutInfeasibleBackoff(t *testing.T) {
 
 func TestMarkInfeasible(t *testing.T) {
 	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	st := &tierdv1.VolumeTierStateStatus{LastModified: new(metav1.NewTime(t0))}
+	st := &tierdv1alpha1.VolumeTierStateStatus{LastModified: new(metav1.NewTime(t0))}
 	check := func(step string, attempts int32, retryAfter time.Time) {
 		t.Helper()
 		if len(st.InfeasibleTiers) != 1 {
@@ -240,7 +240,7 @@ func TestMarkInfeasible(t *testing.T) {
 
 func TestMarkInfeasibleWithoutLastModified(t *testing.T) {
 	// The tier was changed by hand, so tierd never set LastModified.
-	st := &tierdv1.VolumeTierStateStatus{}
+	st := &tierdv1alpha1.VolumeTierStateStatus{}
 	now := time.Now()
 	markInfeasible(st, tierFast, "rejected", "", nil, now)
 	markInfeasible(st, tierFast, "rejected", "", nil, now.Add(time.Minute))
@@ -250,19 +250,19 @@ func TestMarkInfeasibleWithoutLastModified(t *testing.T) {
 }
 
 func TestRecommendSkipsTierInBackoff(t *testing.T) {
-	spec := tierdv1.VolumeTierPolicySpec{
-		Tiers:   []tierdv1.Tier{{VACName: tierBase}, {VACName: tierFast}},
-		ScaleUp: tierdv1.ScaleUp{For: metav1.Duration{Duration: time.Minute}},
+	spec := tierdv1alpha1.VolumeTierPolicySpec{
+		Tiers:   []tierdv1alpha1.Tier{{VACName: tierBase}, {VACName: tierFast}},
+		ScaleUp: tierdv1alpha1.ScaleUp{For: metav1.Duration{Duration: time.Minute}},
 	}
 	now := time.Date(2026, 11, 19, 10, 0, 0, 0, time.UTC)
 	until := now.Add(time.Hour)
-	st := &tierdv1.VolumeTierStateStatus{
+	st := &tierdv1alpha1.VolumeTierStateStatus{
 		CurrentTier:     tierBase,
-		InfeasibleTiers: []tierdv1.InfeasibleTier{{Name: tierFast, RetryAfter: metav1.NewTime(until)}},
+		InfeasibleTiers: []tierdv1alpha1.InfeasibleTier{{Name: tierFast, RetryAfter: metav1.NewTime(until)}},
 	}
 
-	recommend(st, spec, tierdv1.ScaleDirectionUp, "busy", now)
-	after := recommend(st, spec, tierdv1.ScaleDirectionUp, "busy", now.Add(2*time.Minute))
+	recommend(st, spec, tierdv1alpha1.ScaleDirectionUp, "busy", now)
+	after := recommend(st, spec, tierdv1alpha1.ScaleDirectionUp, "busy", now.Add(2*time.Minute))
 	if st.RecommendedTier != tierBase {
 		t.Errorf("during backoff: RecommendedTier = %q, want base", st.RecommendedTier)
 	}
@@ -270,7 +270,7 @@ func TestRecommendSkipsTierInBackoff(t *testing.T) {
 		t.Errorf("during backoff: requeue %v, want %v", after, want)
 	}
 
-	recommend(st, spec, tierdv1.ScaleDirectionUp, "busy", until)
+	recommend(st, spec, tierdv1alpha1.ScaleDirectionUp, "busy", until)
 	if st.RecommendedTier != tierFast {
 		t.Errorf("after backoff: RecommendedTier = %q, want fast", st.RecommendedTier)
 	}
@@ -284,13 +284,13 @@ func TestPruneInfeasible(t *testing.T) {
 			Capacity: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse(size)},
 		}}
 	}
-	entry := func(name string, uid string, size string) tierdv1.InfeasibleTier {
-		return tierdv1.InfeasibleTier{Name: name, VACUID: types.UID(uid), Capacity: new(resource.MustParse(size))}
+	entry := func(name string, uid string, size string) tierdv1alpha1.InfeasibleTier {
+		return tierdv1alpha1.InfeasibleTier{Name: name, VACUID: types.UID(uid), Capacity: new(resource.MustParse(size))}
 	}
 
 	tests := []struct {
 		name  string
-		entry tierdv1.InfeasibleTier
+		entry tierdv1alpha1.InfeasibleTier
 		pvc   *corev1.PersistentVolumeClaim
 		keep  bool
 	}{
@@ -301,7 +301,7 @@ func TestPruneInfeasible(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			st := &tierdv1.VolumeTierStateStatus{InfeasibleTiers: []tierdv1.InfeasibleTier{tt.entry}}
+			st := &tierdv1alpha1.VolumeTierStateStatus{InfeasibleTiers: []tierdv1alpha1.InfeasibleTier{tt.entry}}
 			if err := r.pruneInfeasible(t.Context(), st, tt.pvc); err != nil {
 				t.Fatal(err)
 			}
@@ -320,49 +320,49 @@ func TestSyncOverride(t *testing.T) {
 		specVAC       string
 		annotated     bool
 		applied       string // the PVC's applied-tier annotation
-		status        tierdv1.VolumeTierStateStatus
+		status        tierdv1alpha1.VolumeTierStateStatus
 		wantOverride  bool
 		wantAnnotated bool
 		wantLast      string
 	}{
 		{
 			name:    "spec matches what tierd set",
-			specVAC: tierFast, status: tierdv1.VolumeTierStateStatus{LastAppliedTier: tierFast},
+			specVAC: tierFast, status: tierdv1alpha1.VolumeTierStateStatus{LastAppliedTier: tierFast},
 			wantLast: tierFast,
 		},
 		{
 			name:    "tier changed by hand",
-			specVAC: tierBase, status: tierdv1.VolumeTierStateStatus{LastAppliedTier: tierFast},
+			specVAC: tierBase, status: tierdv1alpha1.VolumeTierStateStatus{LastAppliedTier: tierFast},
 			wantOverride: true, wantAnnotated: true, wantLast: tierFast,
 		},
 		{
 			// The PVC patch re-triggers reconcile before the state's cache
 			// has tierd's LastAppliedTier.
 			name:    "tierd's own change read with a stale state",
-			specVAC: tierFast, applied: tierFast, status: tierdv1.VolumeTierStateStatus{CurrentTier: tierBase, LastAppliedTier: tierBase},
+			specVAC: tierFast, applied: tierFast, status: tierdv1alpha1.VolumeTierStateStatus{CurrentTier: tierBase, LastAppliedTier: tierBase},
 			wantLast: tierBase,
 		},
 		{
 			name:    "tier changed by hand after tierd set it",
-			specVAC: tierBase, applied: tierFast, status: tierdv1.VolumeTierStateStatus{CurrentTier: tierFast},
+			specVAC: tierBase, applied: tierFast, status: tierdv1alpha1.VolumeTierStateStatus{CurrentTier: tierFast},
 			wantOverride: true, wantAnnotated: true,
 		},
 		{
 			name:    "tier changed by hand before tierd ever acted",
-			specVAC: tierFast, status: tierdv1.VolumeTierStateStatus{CurrentTier: tierBase},
+			specVAC: tierFast, status: tierdv1alpha1.VolumeTierStateStatus{CurrentTier: tierBase},
 			wantOverride: true, wantAnnotated: true,
 		},
 		{
 			name:    "annotated by the user",
-			specVAC: tierBase, annotated: true, status: tierdv1.VolumeTierStateStatus{CurrentTier: tierBase},
+			specVAC: tierBase, annotated: true, status: tierdv1alpha1.VolumeTierStateStatus{CurrentTier: tierBase},
 			wantOverride: true, wantAnnotated: true,
 		},
 		{
 			name:    "annotation removed resumes from the spec tier with a fresh window",
 			specVAC: tierBase,
-			status: tierdv1.VolumeTierStateStatus{
+			status: tierdv1alpha1.VolumeTierStateStatus{
 				LastAppliedTier: tierFast, Conditions: overridden,
-				PendingDirection: tierdv1.ScaleDirectionUp, PendingSince: new(metav1.Now()),
+				PendingDirection: tierdv1alpha1.ScaleDirectionUp, PendingSince: new(metav1.Now()),
 			},
 			wantLast: tierBase,
 		},
@@ -382,7 +382,7 @@ func TestSyncOverride(t *testing.T) {
 			}
 			c := fake.NewClientBuilder().WithObjects(pvc).Build()
 			r := &VolumeTierStateReconciler{Client: c, Recorder: events.NewFakeRecorder(10)}
-			vts := &tierdv1.VolumeTierState{Status: tt.status}
+			vts := &tierdv1alpha1.VolumeTierState{Status: tt.status}
 
 			if err := r.syncOverride(t.Context(), vts, pvc); err != nil {
 				t.Fatal(err)
@@ -405,7 +405,7 @@ func TestSyncOverride(t *testing.T) {
 				stored.Annotations[AppliedTierAnnotation] != tt.specVAC {
 				t.Errorf("applied-tier annotation = %q after resume, want %q", stored.Annotations[AppliedTierAnnotation], tt.specVAC)
 			}
-			if tt.status.PendingSince != nil && (vts.Status.PendingSince != nil || vts.Status.PendingDirection != tierdv1.ScaleDirectionNone) {
+			if tt.status.PendingSince != nil && (vts.Status.PendingSince != nil || vts.Status.PendingDirection != tierdv1alpha1.ScaleDirectionNone) {
 				t.Errorf("pending = %s since %v, want cleared on resume", vts.Status.PendingDirection, vts.Status.PendingSince)
 			}
 		})
@@ -428,11 +428,11 @@ func reconcileWith(t *testing.T, objs ...client.Object) client.Client {
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
-	if err := tierdv1.AddToScheme(scheme); err != nil {
+	if err := tierdv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
-		WithStatusSubresource(&tierdv1.VolumeTierState{}).Build()
+		WithStatusSubresource(&tierdv1alpha1.VolumeTierState{}).Build()
 	r := &VolumeTierStateReconciler{Client: c, Recorder: events.NewFakeRecorder(10)}
 	if _, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: testKey}); err != nil {
 		t.Fatal(err)
@@ -441,9 +441,9 @@ func reconcileWith(t *testing.T, objs ...client.Object) client.Client {
 }
 
 // getState returns testKey's VolumeTierState.
-func getState(t *testing.T, c client.Client) *tierdv1.VolumeTierState {
+func getState(t *testing.T, c client.Client) *tierdv1alpha1.VolumeTierState {
 	t.Helper()
-	got := &tierdv1.VolumeTierState{}
+	got := &tierdv1alpha1.VolumeTierState{}
 	if err := c.Get(t.Context(), testKey, got); err != nil {
 		t.Fatal(err)
 	}
@@ -459,11 +459,11 @@ func reconcileOnce(t *testing.T, extra ...client.Object) *metav1.Condition {
 		Namespace: testKey.Namespace, Name: testKey.Name,
 		Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
 	}
-	vtp := &tierdv1.VolumeTierPolicy{Namespace: testKey.Namespace, Name: testPolicy}
+	vtp := &tierdv1alpha1.VolumeTierPolicy{Namespace: testKey.Namespace, Name: testPolicy}
 	// A stale condition from before the policy controller set policyRef.
-	vts := &tierdv1.VolumeTierState{
+	vts := &tierdv1alpha1.VolumeTierState{
 		Namespace: testKey.Namespace, Name: testKey.Name,
-		Status: tierdv1.VolumeTierStateStatus{
+		Status: tierdv1alpha1.VolumeTierStateStatus{
 			PolicyRef: testPolicy,
 			Conditions: []metav1.Condition{{
 				Type: ConditionVTSManaged, Status: metav1.ConditionFalse,
@@ -484,33 +484,33 @@ func TestReconcileWithoutSample(t *testing.T) {
 
 func TestReconcileUnmeasurableVolume(t *testing.T) {
 	const msg = "tierd cannot measure fuse.blobfuse2 volumes"
-	sample := &tierdv1.VolumeIOSample{
+	sample := &tierdv1alpha1.VolumeIOSample{
 		Namespace: "ns", Name: "data",
-		Status: tierdv1.VolumeIOSampleStatus{Conditions: []metav1.Condition{{
-			Type: tierdv1.VolumeIOSampleMeasured, Status: metav1.ConditionFalse,
-			Reason: tierdv1.MeasuredNoSource, Message: msg,
+		Status: tierdv1alpha1.VolumeIOSampleStatus{Conditions: []metav1.Condition{{
+			Type: tierdv1alpha1.VolumeIOSampleMeasured, Status: metav1.ConditionFalse,
+			Reason: tierdv1alpha1.MeasuredNoSource, Message: msg,
 		}}},
 	}
 	cond := reconcileOnce(t, sample)
-	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != tierdv1.MeasuredNoSource || cond.Message != msg {
-		t.Errorf("Managed = %+v, want False/%s %q", cond, tierdv1.MeasuredNoSource, msg)
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != tierdv1alpha1.MeasuredNoSource || cond.Message != msg {
+		t.Errorf("Managed = %+v, want False/%s %q", cond, tierdv1alpha1.MeasuredNoSource, msg)
 	}
 }
 
 func TestPickTier(t *testing.T) {
-	tier := func(name string, iops int64) tierdv1.Tier {
-		return tierdv1.Tier{VACName: name, Ceilings: &tierdv1.Ceiling{IOPS: new(iops)}}
+	tier := func(name string, iops int64) tierdv1alpha1.Tier {
+		return tierdv1alpha1.Tier{VACName: name, Ceilings: &tierdv1alpha1.Ceiling{IOPS: new(iops)}}
 	}
-	spec := tierdv1.VolumeTierPolicySpec{
-		Tiers:   []tierdv1.Tier{tier(tierBase, 1000), tier(tierFast, 5000), tier("ultra", 20000)},
-		ScaleUp: tierdv1.ScaleUp{UtilizationAbove: new(int32(80))},
+	spec := tierdv1alpha1.VolumeTierPolicySpec{
+		Tiers:   []tierdv1alpha1.Tier{tier(tierBase, 1000), tier(tierFast, 5000), tier("ultra", 20000)},
+		ScaleUp: tierdv1alpha1.ScaleUp{UtilizationAbove: new(int32(80))},
 	}
-	noCeilings := tierdv1.VolumeTierPolicySpec{Tiers: []tierdv1.Tier{{VACName: "a"}, {VACName: "b"}}}
-	topOnly := tierdv1.VolumeTierPolicySpec{Tiers: []tierdv1.Tier{{VACName: "a"}, tier("b", 1000)}}
+	noCeilings := tierdv1alpha1.VolumeTierPolicySpec{Tiers: []tierdv1alpha1.Tier{{VACName: "a"}, {VACName: "b"}}}
+	topOnly := tierdv1alpha1.VolumeTierPolicySpec{Tiers: []tierdv1alpha1.Tier{{VACName: "a"}, tier("b", 1000)}}
 
 	tests := []struct {
 		name   string
-		spec   tierdv1.VolumeTierPolicySpec
+		spec   tierdv1alpha1.VolumeTierPolicySpec
 		iops   int64
 		want   string
 		wantOK bool
@@ -519,13 +519,13 @@ func TestPickTier(t *testing.T) {
 		{"over the lowest tier's threshold", spec, 852, tierFast, true},
 		{"exactly at the threshold moves up", spec, 800, tierFast, true},
 		{"exceeds every tier", spec, 30000, "ultra", true},
-		{"no threshold means 100%", tierdv1.VolumeTierPolicySpec{Tiers: spec.Tiers}, 999, tierBase, true},
+		{"no threshold means 100%", tierdv1alpha1.VolumeTierPolicySpec{Tiers: spec.Tiers}, 999, tierBase, true},
 		{"tiers without ceilings are skipped", topOnly, 10, "b", true},
 		{"no tier has ceilings", noCeilings, 10, "", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, why, ok := pickTier(tt.spec, tierdv1.VolumeIOSampleStatus{IOPS: tt.iops})
+			got, why, ok := pickTier(tt.spec, tierdv1alpha1.VolumeIOSampleStatus{IOPS: tt.iops})
 			if got != tt.want || ok != tt.wantOK {
 				t.Errorf("pickTier = %q, %v (%s); want %q, %v", got, ok, why, tt.want, tt.wantOK)
 			}
@@ -535,7 +535,7 @@ func TestPickTier(t *testing.T) {
 
 func TestReconcileAdoptsPVCWithoutClass(t *testing.T) {
 	const driver = "disk.csi.azure.com"
-	objects := func(mode tierdv1.VolumeTierPolicyMode, pvDriver string) []client.Object {
+	objects := func(mode tierdv1alpha1.VolumeTierPolicyMode, pvDriver string) []client.Object {
 		pvc := &corev1.PersistentVolumeClaim{
 			Namespace: testKey.Namespace, Name: testKey.Name,
 			Spec:   corev1.PersistentVolumeClaimSpec{VolumeName: "pv"},
@@ -547,26 +547,26 @@ func TestReconcileAdoptsPVCWithoutClass(t *testing.T) {
 				CSI: &corev1.CSIPersistentVolumeSource{Driver: pvDriver},
 			}},
 		}
-		vtp := &tierdv1.VolumeTierPolicy{
+		vtp := &tierdv1alpha1.VolumeTierPolicy{
 			Namespace: testKey.Namespace, Name: testPolicy,
-			Spec: tierdv1.VolumeTierPolicySpec{
+			Spec: tierdv1alpha1.VolumeTierPolicySpec{
 				Mode: mode,
-				Tiers: []tierdv1.Tier{
-					{VACName: tierBase, Ceilings: &tierdv1.Ceiling{IOPS: new(int64(1000))}},
-					{VACName: tierFast, Ceilings: &tierdv1.Ceiling{IOPS: new(int64(5000))}},
+				Tiers: []tierdv1alpha1.Tier{
+					{VACName: tierBase, Ceilings: &tierdv1alpha1.Ceiling{IOPS: new(int64(1000))}},
+					{VACName: tierFast, Ceilings: &tierdv1alpha1.Ceiling{IOPS: new(int64(5000))}},
 				},
-				ScaleUp: tierdv1.ScaleUp{UtilizationAbove: new(int32(80))},
+				ScaleUp: tierdv1alpha1.ScaleUp{UtilizationAbove: new(int32(80))},
 			},
 		}
 		vac := &storagev1.VolumeAttributesClass{Name: tierBase, DriverName: driver}
-		vts := &tierdv1.VolumeTierState{
+		vts := &tierdv1alpha1.VolumeTierState{
 			Namespace: testKey.Namespace, Name: testKey.Name,
-			Status: tierdv1.VolumeTierStateStatus{PolicyRef: testPolicy},
+			Status: tierdv1alpha1.VolumeTierStateStatus{PolicyRef: testPolicy},
 		}
 		// 852 IOPS is 85% of base, over the 80% threshold: fast fits.
-		sample := &tierdv1.VolumeIOSample{
+		sample := &tierdv1alpha1.VolumeIOSample{
 			Namespace: testKey.Namespace, Name: testKey.Name,
-			Status: tierdv1.VolumeIOSampleStatus{IOPS: 852},
+			Status: tierdv1alpha1.VolumeIOSampleStatus{IOPS: 852},
 		}
 		return []client.Object{pvc, pv, vtp, vac, vts, sample}
 	}
@@ -580,7 +580,7 @@ func TestReconcileAdoptsPVCWithoutClass(t *testing.T) {
 	}
 
 	t.Run("act sets the tier that fits the load", func(t *testing.T) {
-		c := reconcileWith(t, objects(tierdv1.VolumeTierPolicyModeAct, driver)...)
+		c := reconcileWith(t, objects(tierdv1alpha1.VolumeTierPolicyModeAct, driver)...)
 		if got := pvcClass(t, c); got != tierFast {
 			t.Errorf("PVC class = %q, want fast", got)
 		}
@@ -590,7 +590,7 @@ func TestReconcileAdoptsPVCWithoutClass(t *testing.T) {
 	})
 
 	t.Run("recommend only recommends", func(t *testing.T) {
-		c := reconcileWith(t, objects(tierdv1.VolumeTierPolicyModeRecommend, driver)...)
+		c := reconcileWith(t, objects(tierdv1alpha1.VolumeTierPolicyModeRecommend, driver)...)
 		if got := pvcClass(t, c); got != "" {
 			t.Errorf("PVC class = %q, want unset", got)
 		}
@@ -600,7 +600,7 @@ func TestReconcileAdoptsPVCWithoutClass(t *testing.T) {
 	})
 
 	t.Run("another driver's volume is not adopted", func(t *testing.T) {
-		c := reconcileWith(t, objects(tierdv1.VolumeTierPolicyModeAct, "file.csi.azure.com")...)
+		c := reconcileWith(t, objects(tierdv1alpha1.VolumeTierPolicyModeAct, "file.csi.azure.com")...)
 		if got := pvcClass(t, c); got != "" {
 			t.Errorf("PVC class = %q, want unset", got)
 		}
@@ -619,14 +619,14 @@ func TestReconcileTierNotInPolicy(t *testing.T) {
 			Phase: corev1.ClaimBound, CurrentVolumeAttributesClassName: new("other"),
 		},
 	}
-	sample := &tierdv1.VolumeIOSample{Namespace: testKey.Namespace, Name: testKey.Name}
-	vtp := &tierdv1.VolumeTierPolicy{
+	sample := &tierdv1alpha1.VolumeIOSample{Namespace: testKey.Namespace, Name: testKey.Name}
+	vtp := &tierdv1alpha1.VolumeTierPolicy{
 		Namespace: testKey.Namespace, Name: testPolicy,
-		Spec: tierdv1.VolumeTierPolicySpec{Tiers: []tierdv1.Tier{{VACName: tierBase}, {VACName: tierFast}}},
+		Spec: tierdv1alpha1.VolumeTierPolicySpec{Tiers: []tierdv1alpha1.Tier{{VACName: tierBase}, {VACName: tierFast}}},
 	}
-	vts := &tierdv1.VolumeTierState{
+	vts := &tierdv1alpha1.VolumeTierState{
 		Namespace: testKey.Namespace, Name: testKey.Name,
-		Status: tierdv1.VolumeTierStateStatus{PolicyRef: testPolicy},
+		Status: tierdv1alpha1.VolumeTierStateStatus{PolicyRef: testPolicy},
 	}
 	c := reconcileWith(t, pvc, sample, vtp, vts)
 	cond := meta.FindStatusCondition(getState(t, c).Status.Conditions, ConditionVTSManaged)

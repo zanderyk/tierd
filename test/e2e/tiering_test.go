@@ -29,7 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	tierdv1 "github.com/zanderyk/tierd/api/v1"
+	tierdv1alpha1 "github.com/zanderyk/tierd/api/v1alpha1"
 	"github.com/zanderyk/tierd/internal/controller"
 )
 
@@ -55,27 +55,30 @@ var (
 
 // newPolicy returns a policy selecting app=<app> over tiers base and fast,
 // with their ceilings and the profile's `for` windows.
-func newPolicy(ns, name, app string, mode tierdv1.VolumeTierPolicyMode, base, fast Tier) *tierdv1.VolumeTierPolicy {
-	tier := func(t Tier) tierdv1.Tier {
-		return tierdv1.Tier{VACName: t.Name, Ceilings: &tierdv1.Ceiling{IOPS: &t.IOPS, ThroughputMiBPS: &t.ThroughputMiBps}}
+func newPolicy(ns, name, app string, mode tierdv1alpha1.VolumeTierPolicyMode,
+	base, fast Tier) *tierdv1alpha1.VolumeTierPolicy {
+	tier := func(t Tier) tierdv1alpha1.Tier {
+		return tierdv1alpha1.Tier{VACName: t.Name,
+			Ceilings: &tierdv1alpha1.Ceiling{IOPS: &t.IOPS, ThroughputMiBPS: &t.ThroughputMiBps}}
 	}
-	return &tierdv1.VolumeTierPolicy{
+	return &tierdv1alpha1.VolumeTierPolicy{
 		Name: name, Namespace: ns,
-		Spec: tierdv1.VolumeTierPolicySpec{
+		Spec: tierdv1alpha1.VolumeTierPolicySpec{
 			Mode:     mode,
 			Selector: metav1.LabelSelector{MatchLabels: map[string]string{"app": app}},
-			Tiers:    []tierdv1.Tier{tier(base), tier(fast)},
-			ScaleUp:  tierdv1.ScaleUp{For: profile.ScaleFor, UtilizationAbove: new(int32(80))},
+			Tiers:    []tierdv1alpha1.Tier{tier(base), tier(fast)},
+			ScaleUp:  tierdv1alpha1.ScaleUp{For: profile.ScaleFor, UtilizationAbove: new(int32(80))},
 			// I/O pressure is a 60s average that lags the load; don't let it hold
 			// up scale-down.
-			ScaleDown: &tierdv1.ScaleDown{For: profile.ScaleFor, UtilizationBelow: 30, IOPressureBelow: new(int32(100))},
+			ScaleDown: &tierdv1alpha1.ScaleDown{For: profile.ScaleFor, UtilizationBelow: 30, IOPressureBelow: new(int32(100))},
 		},
 	}
 }
 
 // tieringPolicy is an Act-mode policy in tierd-e2e over the tiering classes.
-func tieringPolicy(name, app string) *tierdv1.VolumeTierPolicy {
-	return newPolicy(tieringNS, name, app, tierdv1.VolumeTierPolicyModeAct, profile.Tiering.Base, profile.Tiering.Fast)
+func tieringPolicy(name, app string) *tierdv1alpha1.VolumeTierPolicy {
+	return newPolicy(tieringNS, name, app, tierdv1alpha1.VolumeTierPolicyModeAct,
+		profile.Tiering.Base, profile.Tiering.Fast)
 }
 
 // newPVC returns a PVC of StorageClass sc. A non-empty tier sets its
@@ -236,7 +239,7 @@ var _ = Describe("Tiering", Ordered, Label("tiering"), func() {
 	It("recreates a deleted VolumeTierState and restarts its `for` window", Label(tierChange), func() {
 		By("loading the PVC until tierd wants to scale up")
 		setLoad("sustained")
-		Eventually(pending(loadPVC)).Should(Equal(tierdv1.ScaleDirectionUp))
+		Eventually(pending(loadPVC)).Should(Equal(tierdv1alpha1.ScaleDirectionUp))
 		old := vts(loadPVC)
 
 		By("deleting the VolumeTierState")
@@ -279,7 +282,7 @@ var _ = Describe("Tiering", Ordered, Label("tiering"), func() {
 	})
 
 	It("only recommends in Recommend mode", func() {
-		setMode("tiering", tierdv1.VolumeTierPolicyModeRecommend)
+		setMode("tiering", tierdv1alpha1.VolumeTierPolicyModeRecommend)
 		setLoad("sustained")
 		Eventually(recommended(loadPVC)).Should(Equal(tierFast))
 		Consistently(spec(loadPVC), max(5*time.Second, 2*profile.Agent.PublishInterval.Duration), time.Second).
@@ -288,7 +291,7 @@ var _ = Describe("Tiering", Ordered, Label("tiering"), func() {
 		By("going idle before switching back, so Act doesn't apply the old recommendation")
 		setLoad("idle")
 		Eventually(recommended(loadPVC)).Should(Equal(tierBase))
-		setMode("tiering", tierdv1.VolumeTierPolicyModeAct)
+		setMode("tiering", tierdv1alpha1.VolumeTierPolicyModeAct)
 	})
 
 	It("rolls back a tier the driver rejects and backs off", Label(tierChange), func() {
@@ -298,7 +301,7 @@ var _ = Describe("Tiering", Ordered, Label("tiering"), func() {
 		}
 		setUpperTier := func(tier string) {
 			By("making " + tier + " the policy's upper tier")
-			update(vtpRef("tiering"), func(p *tierdv1.VolumeTierPolicy) { p.Spec.Tiers[1].VACName = tier })
+			update(vtpRef("tiering"), func(p *tierdv1alpha1.VolumeTierPolicy) { p.Spec.Tiers[1].VACName = tier })
 		}
 		setUpperTier(rejected)
 		DeferCleanup(func() {
@@ -310,7 +313,7 @@ var _ = Describe("Tiering", Ordered, Label("tiering"), func() {
 		})
 
 		setLoad("sustained")
-		Eventually(func() []tierdv1.InfeasibleTier { return vts(loadPVC).Status.InfeasibleTiers }).
+		Eventually(func() []tierdv1alpha1.InfeasibleTier { return vts(loadPVC).Status.InfeasibleTiers }).
 			Should(ContainElement(HaveField("Name", rejected)))
 		Eventually(spec(loadPVC)).Should(Equal(tierBase))
 		Eventually(func() int { return events(tieringNS, "TierChangeFailed") }).Should(BeNumerically(">", 0))
@@ -375,7 +378,7 @@ var _ = Describe("Tiering", Ordered, Label("tiering"), func() {
 		fastVAC, fast := otherTier("e2e-other-fast", 1000)
 		objs := []client.Object{
 			&storagev1.StorageClass{Name: "e2e-other", Provisioner: otherDriver}, baseVAC, fastVAC,
-			newPolicy(tieringNS, "other", tieringApp, tierdv1.VolumeTierPolicyModeAct, base, fast),
+			newPolicy(tieringNS, "other", tieringApp, tierdv1alpha1.VolumeTierPolicyModeAct, base, fast),
 			newPVC(tieringNS, "other", tieringApp, "e2e-other", "", false),
 		}
 		create(objs...)
@@ -397,8 +400,8 @@ var _ = Describe("Tiering", Ordered, Label("tiering"), func() {
 // Readers of tierd-e2e objects. Those returning funcs plug into Eventually
 // and Consistently.
 
-func vts(name string) *tierdv1.VolumeTierState  { return getVTS(tieringNS, name) }
-func vtp(name string) *tierdv1.VolumeTierPolicy { return getVTP(tieringNS, name) }
+func vts(name string) *tierdv1alpha1.VolumeTierState  { return getVTS(tieringNS, name) }
+func vtp(name string) *tierdv1alpha1.VolumeTierPolicy { return getVTP(tieringNS, name) }
 
 func spec(pvc string) func() string { return func() string { return specTier(tieringNS, pvc) } }
 
@@ -413,8 +416,8 @@ func recommended(name string) func() string {
 }
 func policyRef(name string) func() string { return func() string { return vts(name).Status.PolicyRef } }
 
-func pending(name string) func() tierdv1.ScaleDirection {
-	return func() tierdv1.ScaleDirection { return vts(name).Status.PendingDirection }
+func pending(name string) func() tierdv1alpha1.ScaleDirection {
+	return func() tierdv1alpha1.ScaleDirection { return vts(name).Status.PendingDirection }
 }
 
 func vtsCond(name, typ string) func() metav1.Condition {
@@ -431,12 +434,12 @@ func pvcRef(name string) *corev1.PersistentVolumeClaim {
 	return &corev1.PersistentVolumeClaim{Namespace: tieringNS, Name: name}
 }
 
-func vtpRef(name string) *tierdv1.VolumeTierPolicy {
-	return &tierdv1.VolumeTierPolicy{Namespace: tieringNS, Name: name}
+func vtpRef(name string) *tierdv1alpha1.VolumeTierPolicy {
+	return &tierdv1alpha1.VolumeTierPolicy{Namespace: tieringNS, Name: name}
 }
 
 func vtsGone(name string) func() bool {
-	return func() bool { return gone(tieringNS, name, &tierdv1.VolumeTierState{}) }
+	return func() bool { return gone(tieringNS, name, &tierdv1alpha1.VolumeTierState{}) }
 }
 
 // setLoad switches the tierd-e2e fio pod's profile.
@@ -447,8 +450,8 @@ func setLoad(mode string) {
 }
 
 // setMode switches a tierd-e2e policy's mode.
-func setMode(policy string, mode tierdv1.VolumeTierPolicyMode) {
+func setMode(policy string, mode tierdv1alpha1.VolumeTierPolicyMode) {
 	GinkgoHelper()
 	By(fmt.Sprintf("switching policy %s to %s", policy, mode))
-	update(vtpRef(policy), func(p *tierdv1.VolumeTierPolicy) { p.Spec.Mode = mode })
+	update(vtpRef(policy), func(p *tierdv1alpha1.VolumeTierPolicy) { p.Spec.Mode = mode })
 }

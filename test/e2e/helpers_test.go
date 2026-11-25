@@ -50,7 +50,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/yaml"
 
-	tierdv1 "github.com/zanderyk/tierd/api/v1"
+	tierdv1alpha1 "github.com/zanderyk/tierd/api/v1alpha1"
 	"github.com/zanderyk/tierd/test/utils"
 )
 
@@ -74,7 +74,7 @@ func setupClient() {
 
 	scheme := runtime.NewScheme()
 	Expect(clientgoscheme.AddToScheme(scheme)).To(Succeed())
-	Expect(tierdv1.AddToScheme(scheme)).To(Succeed())
+	Expect(tierdv1alpha1.AddToScheme(scheme)).To(Succeed())
 
 	k8s, err = client.New(restCfg, client.Options{Scheme: scheme})
 	Expect(err).NotTo(HaveOccurred())
@@ -186,17 +186,17 @@ func getPVC(ns, name string) *corev1.PersistentVolumeClaim {
 	return fetch(ns, name, &corev1.PersistentVolumeClaim{})
 }
 
-func getVTS(ns, name string) *tierdv1.VolumeTierState {
-	return fetch(ns, name, &tierdv1.VolumeTierState{})
+func getVTS(ns, name string) *tierdv1alpha1.VolumeTierState {
+	return fetch(ns, name, &tierdv1alpha1.VolumeTierState{})
 }
 
-func getVTP(ns, name string) *tierdv1.VolumeTierPolicy {
-	return fetch(ns, name, &tierdv1.VolumeTierPolicy{})
+func getVTP(ns, name string) *tierdv1alpha1.VolumeTierPolicy {
+	return fetch(ns, name, &tierdv1alpha1.VolumeTierPolicy{})
 }
 
 //nolint:unparam // ns kept for symmetry with the other get* helpers
-func getSample(ns, name string) *tierdv1.VolumeIOSample {
-	return fetch(ns, name, &tierdv1.VolumeIOSample{})
+func getSample(ns, name string) *tierdv1alpha1.VolumeIOSample {
+	return fetch(ns, name, &tierdv1alpha1.VolumeIOSample{})
 }
 
 // specTier is the PVC's requested VolumeAttributesClass.
@@ -294,7 +294,7 @@ func podLogs(pod string, tail int64) (string, error) {
 // and the manager and agent logs, for a failed spec.
 func dumpDiagnostics(ns string) {
 	for _, list := range []client.ObjectList{
-		&tierdv1.VolumeTierPolicyList{}, &tierdv1.VolumeTierStateList{}, &tierdv1.VolumeIOSampleList{},
+		&tierdv1alpha1.VolumeTierPolicyList{}, &tierdv1alpha1.VolumeTierStateList{}, &tierdv1alpha1.VolumeIOSampleList{},
 		&corev1.PersistentVolumeClaimList{}, &corev1.PodList{},
 	} {
 		if err := k8s.List(ctx, list, client.InNamespace(ns)); err != nil {

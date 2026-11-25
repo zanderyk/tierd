@@ -36,7 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
-	tierdv1 "github.com/zanderyk/tierd/api/v1"
+	tierdv1alpha1 "github.com/zanderyk/tierd/api/v1alpha1"
 	"github.com/zanderyk/tierd/internal/agent/procfs"
 )
 
@@ -54,7 +54,7 @@ var testScheme = func() *runtime.Scheme {
 	if err := clientgoscheme.AddToScheme(s); err != nil {
 		panic(err)
 	}
-	if err := tierdv1.AddToScheme(s); err != nil {
+	if err := tierdv1alpha1.AddToScheme(s); err != nil {
 		panic(err)
 	}
 	return s
@@ -64,7 +64,7 @@ var testScheme = func() *runtime.Scheme {
 // intercepting its calls.
 func newFakeClient(funcs interceptor.Funcs, objs ...client.Object) client.WithWatch {
 	return interceptor.NewClient(fake.NewClientBuilder().WithScheme(testScheme).WithObjects(objs...).
-		WithStatusSubresource(&tierdv1.VolumeIOSample{}, &tierdv1.VolumeTierState{}).Build(), funcs)
+		WithStatusSubresource(&tierdv1alpha1.VolumeIOSample{}, &tierdv1alpha1.VolumeTierState{}).Build(), funcs)
 }
 
 // newPublishCollector returns a collector on node-1 that has discovered one
@@ -130,16 +130,16 @@ func boundPV() *corev1.PersistentVolume {
 
 // tierState is testPVC's VolumeTierState, assigned to policy (empty: not
 // managed).
-func tierState(policy string) *tierdv1.VolumeTierState {
-	return &tierdv1.VolumeTierState{
+func tierState(policy string) *tierdv1alpha1.VolumeTierState {
+	return &tierdv1alpha1.VolumeTierState{
 		Name: testPVC, Namespace: testNS,
-		Status: tierdv1.VolumeTierStateStatus{PolicyRef: policy},
+		Status: tierdv1alpha1.VolumeTierStateStatus{PolicyRef: policy},
 	}
 }
 
 // sampleOwnedBy is an existing VolumeIOSample of the PVC with uid.
-func sampleOwnedBy(uid types.UID) *tierdv1.VolumeIOSample {
-	return &tierdv1.VolumeIOSample{
+func sampleOwnedBy(uid types.UID) *tierdv1alpha1.VolumeIOSample {
+	return &tierdv1alpha1.VolumeIOSample{
 		Name: testPVC, Namespace: testNS,
 		OwnerReferences: []metav1.OwnerReference{{
 			APIVersion: "v1", Kind: "PersistentVolumeClaim", Name: testPVC, UID: uid,
@@ -148,9 +148,9 @@ func sampleOwnedBy(uid types.UID) *tierdv1.VolumeIOSample {
 }
 
 // getSample returns testPVC's VolumeIOSample, or nil if there is none.
-func getSample(t *testing.T, c client.Client) *tierdv1.VolumeIOSample {
+func getSample(t *testing.T, c client.Client) *tierdv1alpha1.VolumeIOSample {
 	t.Helper()
-	s := &tierdv1.VolumeIOSample{}
+	s := &tierdv1alpha1.VolumeIOSample{}
 	err := c.Get(context.Background(), client.ObjectKey{Namespace: testNS, Name: testPVC}, s)
 	if apierrors.IsNotFound(err) {
 		return nil
@@ -193,9 +193,9 @@ func TestPublishWritesSample(t *testing.T) {
 	if st.IOPressureSomeAvg60 == nil || st.IOPressureSomeAvg60.MilliValue() != 34250 {
 		t.Errorf("io pressure = %v, want 34.25", st.IOPressureSomeAvg60)
 	}
-	if cond := meta.FindStatusCondition(st.Conditions, tierdv1.VolumeIOSampleMeasured); cond == nil ||
-		cond.Reason != tierdv1.MeasuredComplete {
-		t.Errorf("Measured condition = %+v, want %s", cond, tierdv1.MeasuredComplete)
+	if cond := meta.FindStatusCondition(st.Conditions, tierdv1alpha1.VolumeIOSampleMeasured); cond == nil ||
+		cond.Reason != tierdv1alpha1.MeasuredComplete {
+		t.Errorf("Measured condition = %+v, want %s", cond, tierdv1alpha1.MeasuredComplete)
 	}
 	if got := seriesCount(t); got != len(volumeGauges) {
 		t.Errorf("%d metric series, want %d", got, len(volumeGauges))
@@ -225,7 +225,7 @@ func TestPublishSkipsVolumes(t *testing.T) {
 		{name: "PV unreadable", objs: []client.Object{boundPV(), tierState("fast")},
 			funcs: failGet[*corev1.PersistentVolume]()},
 		{name: "VolumeTierState unreadable", objs: []client.Object{boundPV(), tierState("fast")},
-			funcs: failGet[*tierdv1.VolumeTierState]()},
+			funcs: failGet[*tierdv1alpha1.VolumeTierState]()},
 		{name: "no VolumeTierState", objs: []client.Object{boundPV()}},
 	}
 	for _, tt := range tests {
@@ -343,9 +343,9 @@ func TestPublishUnmeasurableVolume(t *testing.T) {
 	if s == nil {
 		t.Fatal("no VolumeIOSample created")
 	}
-	if cond := meta.FindStatusCondition(s.Status.Conditions, tierdv1.VolumeIOSampleMeasured); cond == nil ||
-		cond.Reason != tierdv1.MeasuredNoSource || cond.Status != metav1.ConditionFalse {
-		t.Errorf("Measured condition = %+v, want False/%s", cond, tierdv1.MeasuredNoSource)
+	if cond := meta.FindStatusCondition(s.Status.Conditions, tierdv1alpha1.VolumeIOSampleMeasured); cond == nil ||
+		cond.Reason != tierdv1alpha1.MeasuredNoSource || cond.Status != metav1.ConditionFalse {
+		t.Errorf("Measured condition = %+v, want False/%s", cond, tierdv1alpha1.MeasuredNoSource)
 	}
 	if s.Status.LatencyP95Micros != nil || s.Status.UtilizationPercent != nil {
 		t.Errorf("figures reported for an unmeasurable volume: %+v", s.Status)
@@ -358,11 +358,11 @@ func TestPublishUnmeasurableVolume(t *testing.T) {
 // When another writer creates the sample between the agent's Get and Create,
 // the agent reads it back and writes its status.
 func TestWriteSampleCreateRace(t *testing.T) {
-	sampleKind := schema.GroupResource{Group: tierdv1.GroupVersion.Group, Resource: "volumeiosamples"}
+	sampleKind := schema.GroupResource{Group: tierdv1alpha1.GroupVersion.Group, Resource: "volumeiosamples"}
 	missedOnce := false
 	c := newFakeClient(interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey,
 		obj client.Object, opts ...client.GetOption) error {
-		if _, ok := obj.(*tierdv1.VolumeIOSample); ok && !missedOnce {
+		if _, ok := obj.(*tierdv1alpha1.VolumeIOSample); ok && !missedOnce {
 			missedOnce = true
 			return apierrors.NewNotFound(sampleKind, key.Name)
 		}
@@ -383,7 +383,7 @@ func TestWriteSampleErrors(t *testing.T) {
 		name  string
 		funcs interceptor.Funcs
 	}{
-		{"get", failGet[*tierdv1.VolumeIOSample]()},
+		{"get", failGet[*tierdv1alpha1.VolumeIOSample]()},
 		{"create", interceptor.Funcs{Create: func(context.Context, client.WithWatch, client.Object,
 			...client.CreateOption) error {
 			return injected

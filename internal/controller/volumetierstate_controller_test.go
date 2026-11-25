@@ -25,7 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	zanderykgithubiov1 "github.com/zanderyk/tierd/api/v1"
+	zanderykgithubiov1alpha1 "github.com/zanderyk/tierd/api/v1alpha1"
 )
 
 var _ = Describe("VolumeTierState Controller", func() {
@@ -41,13 +41,13 @@ var _ = Describe("VolumeTierState Controller", func() {
 			Name:      resourceName,
 			Namespace: resourceNamespace,
 		}
-		volumetierstate := &zanderykgithubiov1.VolumeTierState{}
+		volumetierstate := &zanderykgithubiov1alpha1.VolumeTierState{}
 
 		BeforeEach(func() {
 			By("creating the custom resource for the Kind VolumeTierState")
 			err := k8sClient.Get(ctx, typeNamespacedName, volumetierstate)
 			if err != nil && errors.IsNotFound(err) {
-				resource := &zanderykgithubiov1.VolumeTierState{
+				resource := &zanderykgithubiov1alpha1.VolumeTierState{
 					Name:      resourceName,
 					Namespace: resourceNamespace,
 					// TODO(user): Specify other spec details if needed.
@@ -58,7 +58,7 @@ var _ = Describe("VolumeTierState Controller", func() {
 
 		AfterEach(func() {
 			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &zanderykgithubiov1.VolumeTierState{}
+			resource := &zanderykgithubiov1alpha1.VolumeTierState{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
 

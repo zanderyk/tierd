@@ -30,7 +30,7 @@ spec:
     - jsonPath: .status.observedAt
       name: Observed
       type: date
-    name: v1
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: VolumeIOSample is the Schema for the volumeiosamples API

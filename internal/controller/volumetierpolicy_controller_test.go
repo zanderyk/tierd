@@ -32,7 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	zanderykgithubiov1 "github.com/zanderyk/tierd/api/v1"
+	zanderykgithubiov1alpha1 "github.com/zanderyk/tierd/api/v1alpha1"
 )
 
 var _ = Describe("VolumeTierPolicy Controller", func() {
@@ -57,15 +57,15 @@ var _ = Describe("VolumeTierPolicy Controller", func() {
 
 	ctx := context.Background()
 
-	newPolicy := func(name string) *zanderykgithubiov1.VolumeTierPolicy {
-		return &zanderykgithubiov1.VolumeTierPolicy{
+	newPolicy := func(name string) *zanderykgithubiov1alpha1.VolumeTierPolicy {
+		return &zanderykgithubiov1alpha1.VolumeTierPolicy{
 			Name:      name,
 			Namespace: namespace,
-			Spec: zanderykgithubiov1.VolumeTierPolicySpec{
+			Spec: zanderykgithubiov1alpha1.VolumeTierPolicySpec{
 				Selector: metav1.LabelSelector{MatchLabels: pvcLabels},
-				Mode:     zanderykgithubiov1.VolumeTierPolicyMode("Recommend"),
-				Tiers:    []zanderykgithubiov1.Tier{{VACName: vacLow}, {VACName: vacHigh}},
-				ScaleUp:  zanderykgithubiov1.ScaleUp{IOPressureAbove: ptr.To[int32](20)},
+				Mode:     zanderykgithubiov1alpha1.VolumeTierPolicyMode("Recommend"),
+				Tiers:    []zanderykgithubiov1alpha1.Tier{{VACName: vacLow}, {VACName: vacHigh}},
+				ScaleUp:  zanderykgithubiov1alpha1.ScaleUp{IOPressureAbove: ptr.To[int32](20)},
 			},
 		}
 	}
@@ -77,14 +77,14 @@ var _ = Describe("VolumeTierPolicy Controller", func() {
 		return res
 	}
 
-	getPolicy := func(name string) *zanderykgithubiov1.VolumeTierPolicy {
-		vtp := &zanderykgithubiov1.VolumeTierPolicy{}
+	getPolicy := func(name string) *zanderykgithubiov1alpha1.VolumeTierPolicy {
+		vtp := &zanderykgithubiov1alpha1.VolumeTierPolicy{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, vtp)).To(Succeed())
 		return vtp
 	}
 
-	getState := func() *zanderykgithubiov1.VolumeTierState {
-		state := &zanderykgithubiov1.VolumeTierState{}
+	getState := func() *zanderykgithubiov1alpha1.VolumeTierState {
+		state := &zanderykgithubiov1alpha1.VolumeTierState{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: pvcName}, state)).To(Succeed())
 		return state
 	}
@@ -138,12 +138,12 @@ var _ = Describe("VolumeTierPolicy Controller", func() {
 
 	AfterEach(func() {
 		By("cleaning up policies, state, PVC and VolumeAttributesClasses")
-		policies := &zanderykgithubiov1.VolumeTierPolicyList{}
+		policies := &zanderykgithubiov1alpha1.VolumeTierPolicyList{}
 		Expect(k8sClient.List(ctx, policies, client.InNamespace(namespace))).To(Succeed())
 		for i := range policies.Items {
 			forceDelete(&policies.Items[i])
 		}
-		deleteIgnoreNotFound(&zanderykgithubiov1.VolumeTierState{Name: pvcName, Namespace: namespace})
+		deleteIgnoreNotFound(&zanderykgithubiov1alpha1.VolumeTierState{Name: pvcName, Namespace: namespace})
 
 		forceDelete(&corev1.PersistentVolumeClaim{Name: pvcName, Namespace: namespace})
 		for _, name := range []string{vacLow, vacHigh, otherLow, otherHigh} {
@@ -154,7 +154,7 @@ var _ = Describe("VolumeTierPolicy Controller", func() {
 
 	// newOtherPolicy is a policy with the same selector whose tiers use
 	// otherDriver.
-	newOtherPolicy := func(name string) *zanderykgithubiov1.VolumeTierPolicy {
+	newOtherPolicy := func(name string) *zanderykgithubiov1alpha1.VolumeTierPolicy {
 		for _, vac := range []string{otherLow, otherHigh} {
 			Expect(k8sClient.Create(ctx, &storagev1.VolumeAttributesClass{
 				Name:       vac,
@@ -163,7 +163,7 @@ var _ = Describe("VolumeTierPolicy Controller", func() {
 			})).To(Succeed())
 		}
 		vtp := newPolicy(name)
-		vtp.Spec.Tiers = []zanderykgithubiov1.Tier{{VACName: otherLow}, {VACName: otherHigh}}
+		vtp.Spec.Tiers = []zanderykgithubiov1alpha1.Tier{{VACName: otherLow}, {VACName: otherHigh}}
 		return vtp
 	}
 
@@ -178,7 +178,7 @@ var _ = Describe("VolumeTierPolicy Controller", func() {
 		Expect(cond.Status).To(Equal(metav1.ConditionTrue))
 		Expect(cond.Message).To(ContainSubstring("Skipped PVCs of other drivers: %s (%s)", pvcName, driver))
 		Expect(errors.IsNotFound(k8sClient.Get(ctx,
-			types.NamespacedName{Namespace: namespace, Name: pvcName}, &zanderykgithubiov1.VolumeTierState{}))).To(BeTrue())
+			types.NamespacedName{Namespace: namespace, Name: pvcName}, &zanderykgithubiov1alpha1.VolumeTierState{}))).To(BeTrue())
 	})
 
 	It("does not report Conflict for policies of different drivers with the same selector", func() {
@@ -258,7 +258,7 @@ var _ = Describe("VolumeTierPolicy Controller", func() {
 		Expect(k8sClient.Delete(ctx, getPolicy(policyB))).To(Succeed())
 		reconcileVTP(policyB) // runs the finalizer, which lets the delete finish
 		Expect(errors.IsNotFound(k8sClient.Get(ctx,
-			types.NamespacedName{Namespace: namespace, Name: policyB}, &zanderykgithubiov1.VolumeTierPolicy{}))).To(BeTrue())
+			types.NamespacedName{Namespace: namespace, Name: policyB}, &zanderykgithubiov1alpha1.VolumeTierPolicy{}))).To(BeTrue())
 		reconcileVTP(policyA)
 
 		Expect(getState().Status.PolicyRef).To(Equal(policyA))
@@ -267,7 +267,7 @@ var _ = Describe("VolumeTierPolicy Controller", func() {
 
 	stateGone := func() bool {
 		return errors.IsNotFound(k8sClient.Get(ctx,
-			types.NamespacedName{Namespace: namespace, Name: pvcName}, &zanderykgithubiov1.VolumeTierState{}))
+			types.NamespacedName{Namespace: namespace, Name: pvcName}, &zanderykgithubiov1alpha1.VolumeTierState{}))
 	}
 
 	It("deletes the state when the PVC stops matching", func() {
@@ -297,13 +297,13 @@ var _ = Describe("VolumeTierPolicy Controller", func() {
 
 		Expect(stateGone()).To(BeTrue())
 		Expect(errors.IsNotFound(k8sClient.Get(ctx,
-			types.NamespacedName{Namespace: namespace, Name: policyA}, &zanderykgithubiov1.VolumeTierPolicy{}))).To(BeTrue())
+			types.NamespacedName{Namespace: namespace, Name: policyA}, &zanderykgithubiov1alpha1.VolumeTierPolicy{}))).To(BeTrue())
 	})
 
 	Describe("tier validation", func() {
 		// expectNotReady reconciles the policy and expects Ready False with
 		// reason, a message containing msg, and no state for the PVC.
-		expectNotReady := func(vtp *zanderykgithubiov1.VolumeTierPolicy, reason VTPConditionReason, msg string) {
+		expectNotReady := func(vtp *zanderykgithubiov1alpha1.VolumeTierPolicy, reason VTPConditionReason, msg string) {
 			Expect(k8sClient.Create(ctx, vtp)).To(Succeed())
 			reconcileVTP(vtp.Name)
 
@@ -313,19 +313,19 @@ var _ = Describe("VolumeTierPolicy Controller", func() {
 			Expect(ready.Reason).To(Equal(string(reason)))
 			Expect(ready.Message).To(ContainSubstring(msg))
 			Expect(errors.IsNotFound(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: pvcName},
-				&zanderykgithubiov1.VolumeTierState{}))).To(BeTrue(), "state created for an invalid policy")
+				&zanderykgithubiov1alpha1.VolumeTierState{}))).To(BeTrue(), "state created for an invalid policy")
 		}
 
 		It("reports a missing VolumeAttributesClass", func() {
 			vtp := newPolicy(policyA)
-			vtp.Spec.Tiers = append(vtp.Spec.Tiers, zanderykgithubiov1.Tier{VACName: "test-tier-missing"})
+			vtp.Spec.Tiers = append(vtp.Spec.Tiers, zanderykgithubiov1alpha1.Tier{VACName: "test-tier-missing"})
 			expectNotReady(vtp, VTPConditionReasonVolumeAttributesClassNotFound, "test-tier-missing")
 		})
 
 		It("reports tiers of different drivers", func() {
 			newOtherPolicy(policyB) // creates the other driver's classes
 			vtp := newPolicy(policyA)
-			vtp.Spec.Tiers = []zanderykgithubiov1.Tier{{VACName: vacLow}, {VACName: otherHigh}}
+			vtp.Spec.Tiers = []zanderykgithubiov1alpha1.Tier{{VACName: vacLow}, {VACName: otherHigh}}
 			// Sorted by driver.
 			expectNotReady(vtp, VTPConditionReasonDriverMismatch,
 				otherDriver+" ("+otherHigh+"); "+driver+" ("+vacLow+")")
@@ -333,9 +333,9 @@ var _ = Describe("VolumeTierPolicy Controller", func() {
 
 		It("reports ceilings that do not increase", func() {
 			vtp := newPolicy(policyA)
-			vtp.Spec.Tiers = []zanderykgithubiov1.Tier{
-				{VACName: vacLow, Ceilings: &zanderykgithubiov1.Ceiling{IOPS: ptr.To[int64](5000)}},
-				{VACName: vacHigh, Ceilings: &zanderykgithubiov1.Ceiling{IOPS: ptr.To[int64](3000)}},
+			vtp.Spec.Tiers = []zanderykgithubiov1alpha1.Tier{
+				{VACName: vacLow, Ceilings: &zanderykgithubiov1alpha1.Ceiling{IOPS: ptr.To[int64](5000)}},
+				{VACName: vacHigh, Ceilings: &zanderykgithubiov1alpha1.Ceiling{IOPS: ptr.To[int64](3000)}},
 			}
 			expectNotReady(vtp, VTPConditionReasonInvalidTiers, "iops ceiling 3000 must be greater")
 		})
@@ -343,7 +343,7 @@ var _ = Describe("VolumeTierPolicy Controller", func() {
 		It("becomes Ready once the missing class is created", func() {
 			const missing = "test-tier-late"
 			vtp := newPolicy(policyA)
-			vtp.Spec.Tiers = append(vtp.Spec.Tiers, zanderykgithubiov1.Tier{VACName: missing})
+			vtp.Spec.Tiers = append(vtp.Spec.Tiers, zanderykgithubiov1alpha1.Tier{VACName: missing})
 			expectNotReady(vtp, VTPConditionReasonVolumeAttributesClassNotFound, missing)
 
 			vac := &storagev1.VolumeAttributesClass{Name: missing, DriverName: driver, Parameters: map[string]string{vacParam: missing}}
@@ -381,7 +381,7 @@ var _ = Describe("VolumeTierPolicy Controller", func() {
 			Expect(r.statesForPolicy(ctx, getPolicy(policyA))).To(ConsistOf(
 				reconcile.Request{Namespace: namespace, Name: pvcName}))
 
-			other := &zanderykgithubiov1.VolumeTierPolicy{Name: policyB, Namespace: namespace}
+			other := &zanderykgithubiov1alpha1.VolumeTierPolicy{Name: policyB, Namespace: namespace}
 			Expect(r.statesForPolicy(ctx, other)).To(BeEmpty())
 		})
 	})

@@ -28,7 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/yaml"
 
-	tierdv1 "github.com/zanderyk/tierd/api/v1"
+	tierdv1alpha1 "github.com/zanderyk/tierd/api/v1alpha1"
 	"github.com/zanderyk/tierd/test/utils"
 )
 
@@ -117,9 +117,9 @@ type Source struct {
 	Direct bool `json:"direct,omitempty"`
 	// Mode is the policy's mode. In Act the spec waits for the PVC to move
 	// to Fast; in Recommend, for the recommendation.
-	Mode tierdv1.VolumeTierPolicyMode `json:"mode"`
-	Base Tier                         `json:"base"`
-	Fast Tier                         `json:"fast"`
+	Mode tierdv1alpha1.VolumeTierPolicyMode `json:"mode"`
+	Base Tier                               `json:"base"`
+	Fast Tier                               `json:"fast"`
 	// StartOnBase starts the PVC on Base; otherwise tierd adopts it.
 	StartOnBase bool `json:"startOnBase,omitempty"`
 	// Measured is the expected reason of the sample's Measured condition.
