@@ -1,0 +1,3 @@
+resources:
+- monitor.yaml
+- agent_monitor.yaml

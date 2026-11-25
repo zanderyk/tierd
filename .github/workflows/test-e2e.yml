@@ -1,0 +1,40 @@
+name: E2E Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-e2e:
+    permissions:
+      contents: read
+    name: Run on Ubuntu
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.0.1
+        with:
+          go-version-file: go.mod
+
+      # The NFS and SMB specs mount shares from inside kind, and the NFS server
+      # runs the kernel's nfsd; load the modules up front so a missing one
+      # fails here, not as a hung mount.
+      - name: Load NFS and SMB kernel modules
+        run: sudo modprobe -a nfs nfsd cifs
+
+      # make installs the pinned kind version into bin/.
+      - name: Running Test e2e
+        run: make test-e2e

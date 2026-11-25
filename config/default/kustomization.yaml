@@ -1,0 +1,39 @@
+# Adds namespace to all resources.
+namespace: tierd-system
+
+# Value of this field is prepended to the
+# names of all resources, e.g. a deployment named
+# "wordpress" becomes "alices-wordpress".
+# Note that it should also match with the prefix (text before '-') of the namespace
+# field above.
+namePrefix: tierd-
+
+# Labels to add to all resources and selectors.
+#labels:
+#- includeSelectors: true
+#  pairs:
+#    someName: someValue
+
+resources:
+- ../crd
+- ../rbac
+- ../manager
+- ../agent
+# [PROMETHEUS] To enable prometheus monitor, uncomment all sections with 'PROMETHEUS'.
+#- ../prometheus
+# [METRICS] Expose the controller manager metrics service.
+- metrics_service.yaml
+# [NETWORK POLICY] Allow metrics traffic only from pods in namespaces labeled
+# 'metrics: enabled'.
+#- ../network-policy
+
+patches:
+# [METRICS] The following patch will enable the metrics endpoint using HTTPS and the port :8443.
+# More info: https://book.kubebuilder.io/reference/metrics
+- path: manager_metrics_patch.yaml
+  target:
+    kind: Deployment
+
+# Scaffold markers kubebuilder needs if webhooks are ever added; leave them.
+# +kubebuilder:scaffold:crdkustomizecainjectionns
+# +kubebuilder:scaffold:crdkustomizecainjectionname

@@ -1,0 +1,47 @@
+Resources in use
+CIFS Session: 1
+Share (unique mount targets): 2
+SMB Request/Response Buffer: 1 Pool size: 5
+SMB Small Req/Resp Buffer: 1 Pool size: 30
+Operations (MIDs): 0
+
+0 session 0 share reconnects
+Total vfs operations: 5265 maximum at one time: 3
+
+Max requests in flight: 95
+1) \\fdd6e27d595f945cab6f708.file.core.windows.net\pvc-217448e1-51e1-46f7-8fbe-54b582e5f0ef
+SMBs: 5673 since 2026-11-20 19:40:46 UTC
+Bytes read: 0  Bytes written: 4875878400
+Open files: 0 total (local), 0 open on server
+TreeConnects: 1 total 0 failed
+TreeDisconnects: 0 total 0 failed
+Creates: 207 total 0 failed
+Closes: 207 total 0 failed
+Flushes: 93 total 0 failed
+Reads: 0 total 0 failed
+Writes: 4956 total 0 failed
+Locks: 0 total 0 failed
+IOCTLs: 1 total 1 failed
+QueryDirectories: 8 total 0 failed
+ChangeNotifies: 0 total 0 failed
+QueryInfos: 14 total 0 failed
+SetInfos: 186 total 0 failed
+OplockBreaks: 0 sent 0 failed
+2) \\10.0.0.5\data
+SMBs: 40 since 2026-11-20 19:41:02 UTC
+Bytes read: 1048576  Bytes written: 0
+Open files: 1 total (local), 1 open on server
+TreeConnects: 1 total 0 failed
+TreeDisconnects: 0 total 0 failed
+Creates: 2 total 0 failed
+Closes: 1 total 0 failed
+Flushes: 0 total 0 failed
+Reads: 16 total 0 failed
+Writes: 0 total 0 failed
+Locks: 0 total 0 failed
+IOCTLs: 0 total 0 failed
+QueryDirectories: 0 total 0 failed
+ChangeNotifies: 0 total 0 failed
+QueryInfos: 4 total 0 failed
+SetInfos: 0 total 0 failed
+OplockBreaks: 0 sent 0 failed

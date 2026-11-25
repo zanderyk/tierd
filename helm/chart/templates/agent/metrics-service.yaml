@@ -1,0 +1,19 @@
+{{- if .Values.agent.metrics.enabled }}
+# Headless, so Prometheus can scrape each node's agent.
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    {{- include "tierd.agentLabels" . | nindent 4 }}
+  name: {{ include "tierd.resourceName" (dict "suffix" "agent-metrics" "context" $) }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  clusterIP: None
+  ports:
+  - name: metrics
+    port: {{ .Values.agent.metrics.port }}
+    protocol: TCP
+    targetPort: metrics
+  selector:
+    {{- include "tierd.agentSelectorLabels" . | nindent 4 }}
+{{- end }}

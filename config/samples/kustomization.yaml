@@ -1,0 +1,5 @@
+## Append samples of your project ##
+# VolumeTierStates and VolumeIOSamples are written by tierd, not users.
+resources:
+- tierd_v1alpha1_volumetierpolicy.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples

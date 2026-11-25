@@ -1,0 +1,22 @@
+# Written by hand: the agent has no kubebuilder RBAC markers, so its
+# permissions stay separate from the generated manager-role.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: tierd
+    app.kubernetes.io/managed-by: kustomize
+  name: agent-role
+rules:
+- apiGroups: [""]
+  resources: ["persistentvolumes"]
+  verbs: ["get"]
+- apiGroups: ["tierd.zanderyk.github.io"]
+  resources: ["volumetierstates"]
+  verbs: ["get"]
+- apiGroups: ["tierd.zanderyk.github.io"]
+  resources: ["volumeiosamples"]
+  verbs: ["get", "create", "delete"]
+- apiGroups: ["tierd.zanderyk.github.io"]
+  resources: ["volumeiosamples/status"]
+  verbs: ["patch"]

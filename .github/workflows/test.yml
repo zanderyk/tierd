@@ -1,0 +1,83 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    permissions:
+      contents: read
+    name: Run on Ubuntu
+    runs-on: ubuntu-latest
+    outputs:
+      coverage: ${{ steps.coverage.outputs.percent }}
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.0.1
+        with:
+          go-version-file: go.mod
+
+      # make test regenerates CRDs, RBAC and deepcopy code and runs go fmt;
+      # the check below fails if any of that, or go.mod, wasn't committed.
+      - name: Running Tests
+        run: make test
+
+      - name: Report coverage
+        id: coverage
+        run: |
+          percent="$(make -s coverage)"
+          echo "percent=$percent" >> "$GITHUB_OUTPUT"
+          echo "Unit test coverage: **${percent}%**" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check generated files and go.mod are up to date
+        run: |
+          go mod tidy
+          git diff --exit-code || {
+            echo "::error::Generated files or go.mod are out of date: run 'go mod tidy' and 'make manifests generate fmt', then commit"
+            exit 1
+          }
+
+  # Publishes the coverage badge the README shows. The repo is private, so
+  # shields.io can't read it; instead the SVG lives on an orphan "badges"
+  # branch that this job force-pushes as a single commit (no history to grow).
+  coverage-badge:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: test
+    permissions:
+      contents: write # push the badges branch
+    name: Publish coverage badge
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Push the badge to the badges branch
+        env:
+          COVERAGE: ${{ needs.test.outputs.coverage }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          dir="$(mktemp -d)"
+          hack/coverage-badge.sh "$COVERAGE" "$dir/coverage.svg"
+          cd "$dir"
+          git init -q -b badges
+          git add coverage.svg
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -q -m "Coverage ${COVERAGE}% at ${GITHUB_SHA::7}"
+          git push -q --force \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" badges

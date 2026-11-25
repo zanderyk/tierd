@@ -1,0 +1,93 @@
+# StorageClasses and VolumeAttributesClasses for the kind profile. The suite
+# applies them once. A VolumeAttributesClass needs at least one parameter.
+
+# Hostpath tiers. The driver has no real limits; the policies' ceilings are
+# made up.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: e2e-hostpath
+provisioner: hostpath.csi.k8s.io
+---
+apiVersion: storage.k8s.io/v1
+kind: VolumeAttributesClass
+metadata:
+  name: e2e-base
+driverName: hostpath.csi.k8s.io
+parameters:
+  tier: base
+---
+apiVersion: storage.k8s.io/v1
+kind: VolumeAttributesClass
+metadata:
+  name: e2e-fast
+driverName: hostpath.csi.k8s.io
+parameters:
+  tier: fast
+---
+# The hostpath driver only accepts the "tier" parameter, so it rejects this
+# class as Infeasible.
+apiVersion: storage.k8s.io/v1
+kind: VolumeAttributesClass
+metadata:
+  name: e2e-rejected
+driverName: hostpath.csi.k8s.io
+parameters:
+  iops: "1000"
+---
+# NFS and SMB, served from testdata/servers.yaml. Neither driver can modify
+# volumes, so their policies only recommend.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: e2e-nfs
+provisioner: nfs.csi.k8s.io
+parameters:
+  server: nfs-server.tierd-sources.svc.cluster.local
+  share: /
+mountOptions: [nfsvers=4.1]
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: e2e-smb
+provisioner: smb.csi.k8s.io
+parameters:
+  source: //smb-server.tierd-sources.svc.cluster.local/share
+  csi.storage.k8s.io/provisioner-secret-name: smbcreds
+  csi.storage.k8s.io/provisioner-secret-namespace: tierd-sources
+  csi.storage.k8s.io/node-stage-secret-name: smbcreds
+  csi.storage.k8s.io/node-stage-secret-namespace: tierd-sources
+mountOptions: [dir_mode=0777, file_mode=0777, noperm, mfsymlinks, cache=strict, noserverino]
+---
+apiVersion: storage.k8s.io/v1
+kind: VolumeAttributesClass
+metadata:
+  name: e2e-nfs-base
+driverName: nfs.csi.k8s.io
+parameters:
+  tier: base
+---
+apiVersion: storage.k8s.io/v1
+kind: VolumeAttributesClass
+metadata:
+  name: e2e-nfs-fast
+driverName: nfs.csi.k8s.io
+parameters:
+  tier: fast
+---
+apiVersion: storage.k8s.io/v1
+kind: VolumeAttributesClass
+metadata:
+  name: e2e-smb-base
+driverName: smb.csi.k8s.io
+parameters:
+  tier: base
+---
+apiVersion: storage.k8s.io/v1
+kind: VolumeAttributesClass
+metadata:
+  name: e2e-smb-fast
+driverName: smb.csi.k8s.io
+parameters:
+  tier: fast

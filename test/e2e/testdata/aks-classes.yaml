@@ -1,0 +1,46 @@
+# VolumeAttributesClasses for the AKS profile, matching the ceilings in
+# profiles/aks.yaml.
+apiVersion: storage.k8s.io/v1
+kind: VolumeAttributesClass
+metadata:
+  name: e2e-pv2-base
+driverName: disk.csi.azure.com
+parameters:
+  DiskIOPSReadWrite: "3000"
+  DiskMBpsReadWrite: "125"
+---
+apiVersion: storage.k8s.io/v1
+kind: VolumeAttributesClass
+metadata:
+  name: e2e-pv2-fast
+driverName: disk.csi.azure.com
+parameters:
+  DiskIOPSReadWrite: "6000"
+  DiskMBpsReadWrite: "250"
+---
+apiVersion: storage.k8s.io/v1
+kind: VolumeAttributesClass
+metadata:
+  name: e2e-pv2-rejected
+driverName: disk.csi.azure.com
+parameters:
+  DiskIOPSReadWrite: "80000"
+  DiskMBpsReadWrite: "1200"
+---
+apiVersion: storage.k8s.io/v1
+kind: VolumeAttributesClass
+metadata:
+  name: e2e-files-base
+driverName: file.csi.azure.com
+parameters:
+  provisionedIOPS: "3000"
+  provisionedBandwidth: "125"
+---
+apiVersion: storage.k8s.io/v1
+kind: VolumeAttributesClass
+metadata:
+  name: e2e-files-fast
+driverName: file.csi.azure.com
+parameters:
+  provisionedIOPS: "6000"
+  provisionedBandwidth: "250"

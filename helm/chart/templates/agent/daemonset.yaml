@@ -1,0 +1,112 @@
+{{- if .Values.rbac.namespaced }}
+{{- fail "rbac.namespaced=true is not supported: tierd reads cluster-scoped PersistentVolumes, StorageClasses and VolumeAttributesClasses" }}
+{{- end }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  labels:
+    {{- include "tierd.agentLabels" . | nindent 4 }}
+  name: {{ include "tierd.resourceName" (dict "suffix" "agent" "context" $) }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "tierd.agentSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "tierd.agentLabels" . | nindent 8 }}
+      {{- with .Values.agent.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "tierd.resourceName" (dict "suffix" "agent" "context" $) }}
+      {{- with .Values.agent.priorityClassName }}
+      priorityClassName: {{ . | quote }}
+      {{- end }}
+      {{- with .Values.agent.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.agent.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.agent.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with (.Values.agent.imagePullSecrets | default .Values.manager.imagePullSecrets) }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: agent
+        image: {{ include "tierd.agentImage" . | quote }}
+        {{- with (.Values.agent.image.pullPolicy | default .Values.manager.image.pullPolicy) }}
+        imagePullPolicy: {{ . }}
+        {{- end }}
+        command:
+        - /agent
+        args:
+        - --health-probe-bind-address=:8081
+        - --metrics-bind-address={{ if .Values.agent.metrics.enabled }}:{{ .Values.agent.metrics.port }}{{ else }}0{{ end }}
+        - --sample-interval={{ .Values.agent.sampleInterval }}
+        - --publish-interval={{ .Values.agent.publishInterval }}
+        - --window={{ .Values.agent.window }}
+        {{- with .Values.agent.extraArgs }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        {{- if .Values.agent.metrics.enabled }}
+        ports:
+        - containerPort: {{ .Values.agent.metrics.port }}
+          name: metrics
+          protocol: TCP
+        {{- end }}
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        {{- with .Values.agent.resources }}
+        resources:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        # Root to read other processes' /proc entries; nothing else.
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+          runAsNonRoot: false
+          runAsUser: 0
+        volumeMounts:
+        - mountPath: /host/proc
+          name: host-proc
+          readOnly: true
+        - mountPath: /host/sys/fs/cgroup
+          name: host-cgroup
+          readOnly: true
+      volumes:
+      - name: host-proc
+        hostPath:
+          path: /proc
+          type: Directory
+      - name: host-cgroup
+        hostPath:
+          path: /sys/fs/cgroup
+          type: Directory

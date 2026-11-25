@@ -1,0 +1,12 @@
+resources:
+- service_account.yaml
+- role.yaml
+- role_binding.yaml
+- daemonset.yaml
+- metrics_service.yaml
+images:
+- name: controller
+  newName: ghcr.io/zanderyk/tierd
+  newTag: latest
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization

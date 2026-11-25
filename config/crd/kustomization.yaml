@@ -1,0 +1,8 @@
+resources:
+- bases/tierd.zanderyk.github.io_volumetierpolicies.yaml
+- bases/tierd.zanderyk.github.io_volumetierstates.yaml
+- bases/tierd.zanderyk.github.io_volumeiosamples.yaml
+# +kubebuilder:scaffold:crdkustomizeresource
+
+# Scaffold marker kubebuilder needs if a conversion webhook is ever added.
+# +kubebuilder:scaffold:crdkustomizewebhookpatch

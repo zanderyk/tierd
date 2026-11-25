@@ -1,0 +1,19 @@
+# Scrapes the node agent's per-volume gauges (plain HTTP).
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  labels:
+    app.kubernetes.io/name: tierd
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/component: agent
+  name: agent-metrics-monitor
+  namespace: system
+spec:
+  endpoints:
+  - path: /metrics
+    port: metrics
+    scheme: http
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tierd
+      app.kubernetes.io/component: agent

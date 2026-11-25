@@ -1,0 +1,18 @@
+apiVersion: v2
+name: tierd
+description: Moves PVCs between VolumeAttributesClass tiers based on observed I/O
+type: application
+
+version: 0.1.0
+# The image tag. Releases set it to the git tag (vX.Y.Z); "latest" here
+# matches config/.
+appVersion: "latest"
+
+keywords:
+  - kubernetes
+  - operator
+  - storage
+  - csi
+
+annotations:
+  kubebuilder.io/generated-by: kubebuilder

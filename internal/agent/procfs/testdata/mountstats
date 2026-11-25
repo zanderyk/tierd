@@ -1,0 +1,34 @@
+device sysfs mounted on /sys with fstype sysfs
+device proc mounted on /proc with fstype proc
+device /dev/nvme0n2 mounted on /var/lib/kubelet/pods/d829585b-1dab-4a23-8e07-cdde26618585/volumes/kubernetes.io~csi/pvc-9e9cec3c-bccd-4057-bda7-e0a5d547dba5/mount with fstype ext4
+device f90bc4865aa034f74b63cc3.file.core.windows.net:/f90bc4865aa034f74b63cc3/pvcn-e7e4eeae-e5f9-42b8-bd1d-4235b71af01c mounted on /var/lib/kubelet/plugins/kubernetes.io/csi/file.csi.azure.com/289dd54bb87fe7b3319f9722357fe48dfa0e9dd0675ed5d1ca0ee7b05222eeff/globalmount with fstype nfs4 statvers=1.1
+	opts:	rw,vers=4.1,rsize=1048576,wsize=1048576,namlen=255,acregmin=30,acregmax=30,acdirmin=30,acdirmax=30,hard,noresvport,proto=tcp,nconnect=4,timeo=600,retrans=2,sec=sys
+	age:	1200
+	events:	3 0 0 5 2 0 25 128000 0 0 0 11 2 9 20 0 0 10 0 9 128000 0 0 0 0 0 0
+	bytes:	0 524288000 0 0 0 524288000 0 128000
+	RPC iostats version: 1.1  p/v: 100003/4 (nfs)
+	xprt:	tcp 0 0 1 0 1 3775 3775 0 3775 0 4 0 0
+	per-op statistics
+	        NULL: 1 1 0 44 24 0 1 1 0
+	        READ: 0 0 0 0 0 0 0 0 0
+	       WRITE: 3750 3750 0 3933210000 690000 11423 61217 72977 0
+	      COMMIT: 0 0 0 0 0 0 0 0 0
+
+device f90bc4865aa034f74b63cc3.file.core.windows.net:/f90bc4865aa034f74b63cc3/pvcn-e7e4eeae-e5f9-42b8-bd1d-4235b71af01c mounted on /var/lib/kubelet/pods/15e3d643-8074-4255-9630-f6f9fd48e063/volumes/kubernetes.io~csi/pvc-e7e4eeae-e5f9-42b8-bd1d-4235b71af01c/mount with fstype nfs4 statvers=1.1
+	opts:	rw,vers=4.1,rsize=1048576,wsize=1048576,namlen=255,acregmin=30,acregmax=30,acdirmin=30,acdirmax=30,hard,noresvport,proto=tcp,nconnect=4,timeo=600,retrans=2,sec=sys
+	age:	1200
+	events:	3 0 0 5 2 0 25 128000 0 0 0 11 2 9 20 0 0 10 0 9 128000 0 0 0 0 0 0
+	bytes:	0 524288000 0 0 0 524288000 0 128000
+	RPC iostats version: 1.1  p/v: 100003/4 (nfs)
+	xprt:	tcp 0 0 1 0 1 3775 3775 0 3775 0 4 0 0
+	per-op statistics
+	        NULL: 1 1 0 44 24 0 1 1 0
+	        READ: 0 0 0 0 0 0 0 0 0
+	       WRITE: 3750 3750 0 3933210000 690000 11423 61217 72977 0
+	      COMMIT: 0 0 0 0 0 0 0 0 0
+
+device 10.0.0.4:/export\040one mounted on /mnt/with\040space with fstype nfs statvers=1.1
+	bytes:	2097152 0 0 0 2097152 0 512 0
+	per-op statistics
+	        READ: 2 2 0 300 2097400 1 18 20
+	       WRITE: 0 0 0 0 0 0 0 0

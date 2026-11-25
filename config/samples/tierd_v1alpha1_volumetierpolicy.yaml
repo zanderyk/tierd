@@ -1,0 +1,35 @@
+# Moves PVCs labelled app=postgres between two VolumeAttributesClasses.
+# Replace the tier names with VolumeAttributesClasses of your CSI driver,
+# lowest first, and set each tier's ceilings to what it provisions.
+apiVersion: tierd.zanderyk.github.io/v1alpha1
+kind: VolumeTierPolicy
+metadata:
+  labels:
+    app.kubernetes.io/name: tierd
+    app.kubernetes.io/managed-by: kustomize
+  name: volumetierpolicy-sample
+spec:
+  # Recommend only records the tier tierd would pick; Act also moves the PVC.
+  mode: Recommend
+  selector:
+    matchLabels:
+      app: postgres
+  tiers:
+  - name: standard
+    ceilings:
+      iops: 3000
+      throughputMiBps: 125
+  - name: fast
+    ceilings:
+      iops: 10000
+      throughputMiBps: 500
+  scaleUp:
+    # Scale up when the volume uses more than 80% of its tier's ceilings
+    # for 5 minutes.
+    for: 5m
+    utilizationAbove: 80
+  scaleDown:
+    # Scale down when it would use less than 30% of the tier below for an
+    # hour.
+    for: 1h
+    utilizationBelow: 30
