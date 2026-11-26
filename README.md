@@ -46,6 +46,33 @@ What the agent can measure:
 
 A sample's `Measured` condition says which figures are missing.
 
+### CSI drivers
+
+Each CSI driver implements `ModifyVolume` differently, which affects how
+quickly a tier change takes effect and how often tierd can change tiers.
+
+| Driver | Tested | Behavior |
+|---|---|---|
+| `disk.csi.azure.com` | Yes (AKS) | Applies live. At least 6 hours between tier changes on a volume; tierd rolls back a rejected change and retries with backoff. |
+| `file.csi.azure.com` | Yes (AKS) | Applies live. At least 6 hours between tier changes on a share. |
+| `rbd.csi.ceph.com` (`krbd`, default) | Yes (Rook) | The change is accepted and the PVC shows the new class, but the limits reach the application pod only when it restarts. |
+| `rbd.csi.ceph.com` (`rbd-nbd`) | Yes (Rook) | Applies live, but much slower than krbd. |
+| `hostpath.csi.k8s.io` | Yes (kind, e2e) | Records the change but enforces no limits. For testing only. |
+| `nfs.csi.k8s.io`, `smb.csi.k8s.io` | Yes (kind, e2e) | Measured, but can't modify volumes. Use `Recommend` mode. |
+| `ebs.csi.aws.com` | Not yet | Supports type, IOPS and throughput changes. AWS requires at least 6 hours between modifications of a volume. |
+| `pd.csi.storage.gke.io` (Hyperdisk) | Yes (GKE) | Applies live, but takes about 5 minutes after the PVC shows the new class. Rate-limited: a second change soon after is rejected as `Infeasible`. |
+| `pxd.portworx.com` | Not yet | Supports modifying volume attributes. |
+
+Reports for other drivers are welcome; open an issue with what you saw.
+
+On krbd, a running pod keeps its old limits until it restarts, so use
+`Recommend` mode or expect changes to land on the next rollout. For Ceph,
+set the `iops` ceiling to read + write, since its limits apply to each
+direction.
+
+On GCP Hyperdisk, set `scaleUp.for` and `scaleDown.for` longer than about
+5 minutes, so tierd doesn't judge a change before it takes effect.
+
 ## Install
 
 Requires Kubernetes v1.34+ with cgroup v2 nodes and a CSI driver that
