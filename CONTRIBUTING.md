@@ -1,7 +1,5 @@
 # Contributing to tierd
 
-Thanks for helping. Issues and pull requests are welcome.
-
 ## Before you start
 
 For anything bigger than a small fix, open an issue first so we can agree on
