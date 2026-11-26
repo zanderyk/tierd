@@ -60,6 +60,7 @@ quickly a tier change takes effect and how often tierd can change tiers.
 | `hostpath.csi.k8s.io` | Yes (kind, e2e) | Records the change but enforces no limits. For testing only. |
 | `nfs.csi.k8s.io`, `smb.csi.k8s.io` | Yes (kind, e2e) | Measured, but can't modify volumes. Use `Recommend` mode. |
 | `ebs.csi.aws.com` | Not yet | Supports type, IOPS and throughput changes. AWS requires at least 6 hours between modifications of a volume. |
+| `csi.trident.netapp.io` (NetApp Trident) | No | Can't modify volumes: `ControllerModifyVolume` is unimplemented (as of 26.10.1). Use `Recommend` mode. |
 | `pd.csi.storage.gke.io` (Hyperdisk) | Yes (GKE) | Applies live, but takes about 5 minutes after the PVC shows the new class. Rate-limited: a second change soon after is rejected as `Infeasible`. |
 | `pxd.portworx.com` | Not yet | Supports modifying volume attributes. |
 
