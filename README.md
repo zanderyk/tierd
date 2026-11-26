@@ -79,9 +79,6 @@ On GCP Hyperdisk, set `scaleUp.for` and `scaleDown.for` longer than about
 Requires Kubernetes v1.34+ with cgroup v2 nodes and a CSI driver that
 supports `ControllerModifyVolume` (VolumeAttributesClass changes).
 
-Each release publishes a multi-arch image to `ghcr.io/zanderyk/tierd` and a Helm
-chart.
-
 With Helm:
 
 ```sh
